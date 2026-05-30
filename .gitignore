@@ -1,0 +1,39 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor and local workspace files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local environment
+.env
+.env.*
+
+# Logs and temporary transcoding artifacts
+*.log
+*.hevc-partial
+*.hevc-error.log
+
+# Keep large media libraries and ad-hoc samples out of the repo.
+*.mkv
+*.mp4
+*.m4v
+*.mov
+*.avi
+*.wmv
+*.flv
+*.webm
+*.ts
+*.m2ts
+
+# Common scratch directories
+tmp/
+temp/
+scratch/
+samples/
+media/
