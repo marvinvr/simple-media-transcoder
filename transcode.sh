@@ -57,6 +57,7 @@ fi
 # Use a progress bar in Terminal, but keep redirected cron logs readable.
 INTERACTIVE=0
 [[ -t 1 ]] && INTERACTIVE=1
+PROGRESS_ROWS=0
 
 video_codec() {
   ffprobe \
@@ -98,9 +99,7 @@ show_progress() {
   local BAR=""
   local PREFIX=""
   local COLUMNS_OUT=""
-  local AVAILABLE=0
-  local STATUS_LENGTH=0
-  local STATUS_START=0
+  local STATUS_ROWS=1
   local I
 
   if (( ! INTERACTIVE )); then
@@ -125,6 +124,13 @@ show_progress() {
   PREFIX="$(printf '[%s] %3d%%  %d/%d  ' \
     "$BAR" "$PERCENT" "$COMPLETED" "$TOTAL")"
 
+  if (( PROGRESS_ROWS > 0 )); then
+    printf '\r\033[2K'
+    for (( I = 1; I < PROGRESS_ROWS; I++ )); do
+      printf '\033[1A\r\033[2K'
+    done
+  fi
+
   COLUMNS_OUT="$(tput cols 2>/dev/null || true)"
   case "$COLUMNS_OUT" in
     ''|*[!0-9]*)
@@ -132,24 +138,10 @@ show_progress() {
       ;;
   esac
 
-  AVAILABLE=$(( COLUMNS_OUT - ${#PREFIX} ))
-  if (( AVAILABLE < 0 )); then
-    AVAILABLE=0
-  fi
+  STATUS_ROWS=$(( ${#STATUS} / COLUMNS_OUT + 1 ))
+  PROGRESS_ROWS=$(( STATUS_ROWS + 1 ))
 
-  STATUS_LENGTH=${#STATUS}
-  if (( STATUS_LENGTH > AVAILABLE )); then
-    if (( AVAILABLE == 0 )); then
-      STATUS=""
-    elif (( AVAILABLE <= 3 )); then
-      STATUS="${STATUS[1,$AVAILABLE]}"
-    else
-      STATUS_START=$(( STATUS_LENGTH - AVAILABLE + 4 ))
-      STATUS="...${STATUS[$STATUS_START,-1]}"
-    fi
-  fi
-
-  printf '\r%s%s\033[K' "$PREFIX" "$STATUS"
+  printf '%s\n%s\033[K' "$PREFIX" "$STATUS"
 }
 
 finish_item() {
@@ -170,11 +162,19 @@ finish_item() {
   fi
 }
 
+finish_progress() {
+  if (( INTERACTIVE && PROGRESS_ROWS > 0 )); then
+    printf '\n'
+    PROGRESS_ROWS=0
+  fi
+}
+
 print_detail() {
   local MESSAGE="$1"
 
   if (( INTERACTIVE )); then
-    printf '\n%s\n' "$MESSAGE"
+    finish_progress
+    printf '%s\n' "$MESSAGE"
   else
     printf '%s\n' "$MESSAGE"
   fi
@@ -299,7 +299,7 @@ TRANSCODE_TOTAL=${#TRANSCODE_FILES[@]}
 if (( INTERACTIVE )); then
   show_progress "$SCAN_CURRENT" "$TOTAL" \
     "Scan complete: $TRANSCODE_TOTAL to transcode"
-  printf '\n'
+  finish_progress
 else
   echo
 fi
@@ -428,7 +428,7 @@ done
 
 if (( INTERACTIVE )); then
   show_progress "$TRANSCODE_TOTAL" "$TRANSCODE_TOTAL" "Transcoding complete"
-  printf '\n'
+  finish_progress
 else
   echo
 fi
