@@ -13,7 +13,7 @@ There are capable tools for automated media transcoding, but some setups do not 
 * Copies audio tracks, subtitles, chapters, attachments, and metadata
 * Replaces the original only after verifying the output
 * Keeps the original when the transcoded file is not smaller
-* Shows separate scanning and transcoding progress with relative paths
+* Shows separate scanning, transcoding, and per-file encode progress with relative paths
 
 Supported containers: MKV, MP4, M4V, and MOV.
 
@@ -30,6 +30,13 @@ brew install ffmpeg
 ```bash
 chmod +x transcode.sh
 ./transcode.sh "/Volumes/YourNAS/Media"
+```
+
+You can pass multiple folders. The script scans each folder first, then
+transcodes one combined queue:
+
+```bash
+./transcode.sh "/Volumes/YourNAS/Movies" "/Volumes/YourNAS/Shows"
 ```
 
 The default quality setting is `70`. Override it for a specific run with:

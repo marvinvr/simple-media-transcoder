@@ -1,21 +1,18 @@
 #!/bin/zsh
 set -u
 
-LIBRARY_INPUT="${1:?Usage: $0 /path/to/library}"
+if (( $# == 0 )); then
+  echo "Usage: $0 /path/to/library [/path/to/another-library ...]"
+  exit 1
+fi
+
+LIBRARY_INPUTS=("$@")
 
 # Apple VideoToolbox quality scale: higher = better quality and larger files.
 QUALITY="${QUALITY:-70}"
 
 # Width of the terminal progress bar.
 BAR_WIDTH="${BAR_WIDTH:-32}"
-
-if [[ ! -d "$LIBRARY_INPUT" ]]; then
-  echo "ERROR: Library folder does not exist: $LIBRARY_INPUT"
-  exit 1
-fi
-
-# Normalize the path so displayed filenames can be relative to the library root.
-LIBRARY="$(cd "$LIBRARY_INPUT" && pwd -P)"
 
 case "$QUALITY" in
   ''|*[!0-9]*)
@@ -40,6 +37,13 @@ if (( BAR_WIDTH < 1 )); then
   echo "ERROR: BAR_WIDTH must be a positive integer."
   exit 1
 fi
+
+for LIBRARY_INPUT in "${LIBRARY_INPUTS[@]}"; do
+  if [[ ! -d "$LIBRARY_INPUT" ]]; then
+    echo "ERROR: Library folder does not exist: $LIBRARY_INPUT"
+    exit 1
+  fi
+done
 
 if ! command -v ffmpeg >/dev/null 2>&1 || \
    ! command -v ffprobe >/dev/null 2>&1; then
@@ -96,6 +100,15 @@ video_resolution() {
     head -n 1
 }
 
+video_duration() {
+  ffprobe \
+    -v error \
+    -show_entries format=duration \
+    -of default=noprint_wrappers=1:nokey=1 \
+    "$1" 2>/dev/null |
+    awk 'NR == 1 && $1 ~ /^[0-9]+([.][0-9]+)?$/ { printf "%.0f\n", $1 }'
+}
+
 relative_path() {
   local FILE="$1"
 
@@ -110,6 +123,7 @@ show_progress() {
   local COMPLETED="$1"
   local TOTAL="$2"
   local STATUS="${3:-}"
+  local DETAIL="${4:-}"
   local PERCENT=0
   local FILLED=0
   local EMPTY=0
@@ -141,6 +155,9 @@ show_progress() {
 
   printf '\033[u\033[J'
   printf '%s\n%s' "$PREFIX" "$STATUS"
+  if [[ -n "$DETAIL" ]]; then
+    printf '\n%s' "$DETAIL"
+  fi
   PROGRESS_ACTIVE=1
 }
 
@@ -182,15 +199,95 @@ print_detail() {
   fi
 }
 
+format_duration() {
+  local TOTAL_SECONDS="${1:-0}"
+  local HOURS=0
+  local MINUTES=0
+  local SECONDS=0
+
+  case "$TOTAL_SECONDS" in
+    ''|*[!0-9]*)
+      printf '%s' '--:--:--'
+      return
+      ;;
+  esac
+
+  HOURS=$(( TOTAL_SECONDS / 3600 ))
+  MINUTES=$(( (TOTAL_SECONDS % 3600) / 60 ))
+  SECONDS=$(( TOTAL_SECONDS % 60 ))
+
+  printf '%02d:%02d:%02d' "$HOURS" "$MINUTES" "$SECONDS"
+}
+
+show_encode_progress() {
+  local COMPLETED="$1"
+  local TOTAL="$2"
+  local STATUS="$3"
+  local DURATION_SECONDS="$4"
+  local OUT_TIME_US="${5:-0}"
+  local FPS="${6:-?}"
+  local SPEED="${7:-?}"
+  local OUT_SECONDS=0
+  local FILE_PERCENT_TEXT=""
+  local DETAIL=""
+
+  case "$OUT_TIME_US" in
+    ''|*[!0-9]*)
+      OUT_TIME_US=0
+      ;;
+  esac
+
+  OUT_SECONDS=$(( OUT_TIME_US / 1000000 ))
+
+  if [[ "$FPS" == "N/A" || -z "$FPS" ]]; then
+    FPS="?"
+  fi
+
+  if [[ "$SPEED" == "N/A" || -z "$SPEED" ]]; then
+    SPEED="?"
+  fi
+
+  case "$DURATION_SECONDS" in
+    ''|*[!0-9]*|0)
+      FILE_PERCENT_TEXT="--%"
+      ;;
+    *)
+      if (( OUT_SECONDS > DURATION_SECONDS )); then
+        OUT_SECONDS="$DURATION_SECONDS"
+      fi
+      FILE_PERCENT_TEXT="$(( OUT_SECONDS * 100 / DURATION_SECONDS ))%"
+      ;;
+  esac
+
+  DETAIL="$(printf 'Current file: %s  %s / %s  %s fps  %s' \
+    "$FILE_PERCENT_TEXT" \
+    "$(format_duration "$OUT_SECONDS")" \
+    "$(format_duration "$DURATION_SECONDS")" \
+    "$FPS" \
+    "$SPEED")"
+
+  show_progress "$COMPLETED" "$TOTAL" "$STATUS" "$DETAIL"
+}
+
 encode_file() {
   local DECODE_MODE="$1"
   local INPUT="$2"
   local OUTPUT="$3"
   local MUXER="$4"
-  shift 4
+  local COMPLETED="$5"
+  local TOTAL="$6"
+  local STATUS="$7"
+  local DURATION_SECONDS="$8"
+  shift 8
 
   local -a EXTRA_ARGS
   local -a INPUT_ARGS
+  local KEY=""
+  local VALUE=""
+  local OUT_TIME_US=0
+  local FPS="?"
+  local SPEED="?"
+  local -a PIPE_STATUS
 
   EXTRA_ARGS=("$@")
   INPUT_ARGS=()
@@ -205,6 +302,8 @@ encode_file() {
   ffmpeg \
     -hide_banner \
     -loglevel error \
+    -stats_period 1 \
+    -progress pipe:1 \
     -nostdin \
     -y \
     "${INPUT_ARGS[@]}" \
@@ -217,231 +316,327 @@ encode_file() {
     -q:V:0 "$QUALITY" \
     "${EXTRA_ARGS[@]}" \
     -f "$MUXER" \
-    "$OUTPUT"
+    "$OUTPUT" |
+    while IFS='=' read -r KEY VALUE; do
+      case "$KEY" in
+        fps)
+          FPS="$VALUE"
+          ;;
+        out_time_ms|out_time_us)
+          OUT_TIME_US="$VALUE"
+          ;;
+        speed)
+          SPEED="$VALUE"
+          ;;
+        progress)
+          show_encode_progress "$COMPLETED" "$TOTAL" "$STATUS" \
+            "$DURATION_SECONDS" "$OUT_TIME_US" "$FPS" "$SPEED"
+          ;;
+      esac
+    done
+
+  PIPE_STATUS=("${pipestatus[@]}")
+  return "${PIPE_STATUS[1]}"
 }
 
-print_banner
-(( INTERACTIVE )) && printf '\033[s'
+print_section() {
+  local TITLE="$1"
 
-# Build the list first so the script knows the total file count.
-FILES=()
+  finish_progress
+  if (( INTERACTIVE )); then
+    printf '\033[1m== %s ==\033[0m\n' "$TITLE"
+    printf '\033[s'
+  else
+    printf '== %s ==\n' "$TITLE"
+  fi
+}
 
-while IFS= read -r -d '' FILE; do
-  FILES+=("$FILE")
-done < <(
-  find "$LIBRARY" -type f \( \
-    -iname "*.mkv" -o \
-    -iname "*.mp4" -o \
-    -iname "*.m4v" -o \
-    -iname "*.mov" \
-  \) -print0
-)
+scan_library() {
+  local LIBRARY_INPUT="$1"
+  local LIBRARY=""
+  local FILE=""
+  local RELATIVE_PATH=""
+  local CODEC=""
+  local RESOLUTION=""
+  local DURATION=0
+  local EXT=""
+  local SCAN_CURRENT=0
+  local SCAN_TOTAL=0
+  local QUEUED_BEFORE=0
+  local -a FILES
 
-TOTAL=${#FILES[@]}
-SCAN_CURRENT=0
+  # Normalize the path so displayed filenames can be relative to the library root.
+  LIBRARY="$(cd "$LIBRARY_INPUT" && pwd -P)"
+  print_section "Scanning: $LIBRARY"
+
+  FILES=()
+  while IFS= read -r -d '' FILE; do
+    FILES+=("$FILE")
+  done < <(
+    find "$LIBRARY" -type f \( \
+      -iname "*.mkv" -o \
+      -iname "*.mp4" -o \
+      -iname "*.m4v" -o \
+      -iname "*.mov" \
+    \) -print0
+  )
+
+  SCAN_TOTAL=${#FILES[@]}
+  TOTAL_FILES=$(( TOTAL_FILES + SCAN_TOTAL ))
+  QUEUED_BEFORE=${#TRANSCODE_FILES[@]}
+
+  if (( SCAN_TOTAL == 0 )); then
+    echo "No supported media files found."
+    return
+  fi
+
+  show_progress 0 "$SCAN_TOTAL" "Scanning"
+
+  for FILE in "${FILES[@]}"; do
+    SCAN_CURRENT=$(( SCAN_CURRENT + 1 ))
+    RELATIVE_PATH="$(relative_path "$FILE")"
+
+    show_progress $(( SCAN_CURRENT - 1 )) "$SCAN_TOTAL" \
+      "Scanning: $RELATIVE_PATH"
+
+    CODEC="$(video_codec "$FILE")"
+    RESOLUTION="$(video_resolution "$FILE")"
+    DURATION="$(video_duration "$FILE")"
+    if [[ -z "$DURATION" ]]; then
+      DURATION=0
+    fi
+
+    if [[ -z "$CODEC" || -z "$RESOLUTION" ]]; then
+      SKIPPED_OTHER=$(( SKIPPED_OTHER + 1 ))
+      finish_item "$SCAN_CURRENT" "$SCAN_TOTAL" \
+        "SCAN SKIP: Could not inspect: $RELATIVE_PATH"
+      continue
+    fi
+
+    # ffprobe reports both H.265 and HEVC as "hevc".
+    if [[ "$CODEC" == "hevc" ]]; then
+      SKIPPED_HEVC=$(( SKIPPED_HEVC + 1 ))
+      finish_item "$SCAN_CURRENT" "$SCAN_TOTAL" \
+        "SCAN SKIP: Already HEVC: $RELATIVE_PATH"
+      continue
+    fi
+
+    EXT="$(printf '%s' "${FILE##*.}" | tr '[:upper:]' '[:lower:]')"
+
+    case "$EXT" in
+      mkv|mp4|m4v|mov)
+        TRANSCODE_FILES+=("$FILE")
+        TRANSCODE_LIBRARIES+=("$LIBRARY")
+        TRANSCODE_CODECS+=("$CODEC")
+        TRANSCODE_RESOLUTIONS+=("$RESOLUTION")
+        TRANSCODE_DURATIONS+=("$DURATION")
+        finish_item "$SCAN_CURRENT" "$SCAN_TOTAL" \
+          "QUEUE: $RELATIVE_PATH ($CODEC -> hevc, $RESOLUTION)"
+        ;;
+      *)
+        SKIPPED_OTHER=$(( SKIPPED_OTHER + 1 ))
+        finish_item "$SCAN_CURRENT" "$SCAN_TOTAL" \
+          "SCAN SKIP: Unsupported container: $RELATIVE_PATH"
+        continue
+        ;;
+    esac
+  done
+
+  if (( INTERACTIVE )); then
+    show_progress "$SCAN_CURRENT" "$SCAN_TOTAL" \
+      "Scan complete: $((${#TRANSCODE_FILES[@]} - QUEUED_BEFORE)) queued from this path"
+    finish_progress
+  else
+    echo
+  fi
+}
+
+transcode_all() {
+  local CURRENT=0
+  local TRANSCODE_TOTAL=${#TRANSCODE_FILES[@]}
+  local LIBRARY=""
+  local FILE=""
+  local RELATIVE_PATH=""
+  local CODEC=""
+  local RESOLUTION=""
+  local DURATION=0
+  local EXT=""
+  local MUXER=""
+  local TEMP=""
+  local ERROR_LOG=""
+  local OUTPUT_CODEC=""
+  local OUTPUT_RESOLUTION=""
+  local ORIGINAL_SIZE=0
+  local OUTPUT_SIZE=0
+  local -a EXTRA_ARGS
+
+  print_section "Transcoding"
+
+  if (( TRANSCODE_TOTAL == 0 )); then
+    echo "Finished processing $TOTAL_FILES files."
+    echo "  Queued for transcoding:   0"
+    echo "  Encoded and replaced:     $ENCODED"
+    echo "  Already HEVC:             $SKIPPED_HEVC"
+    echo "  Output was not smaller:   $SKIPPED_LARGER"
+    echo "  Other files skipped:      $SKIPPED_OTHER"
+    echo "  Failed:                   $FAILED"
+    return
+  fi
+
+  show_progress 0 "$TRANSCODE_TOTAL" "Transcoding"
+
+  for (( CURRENT = 1; CURRENT <= TRANSCODE_TOTAL; CURRENT++ )); do
+    FILE="${TRANSCODE_FILES[$CURRENT]}"
+    LIBRARY="${TRANSCODE_LIBRARIES[$CURRENT]}"
+    CODEC="${TRANSCODE_CODECS[$CURRENT]}"
+    RESOLUTION="${TRANSCODE_RESOLUTIONS[$CURRENT]}"
+    DURATION="${TRANSCODE_DURATIONS[$CURRENT]}"
+    RELATIVE_PATH="$(relative_path "$FILE")"
+
+    EXT="$(printf '%s' "${FILE##*.}" | tr '[:upper:]' '[:lower:]')"
+    EXTRA_ARGS=()
+
+    case "$EXT" in
+      mkv)
+        MUXER="matroska"
+        ;;
+      mp4|m4v)
+        MUXER="mp4"
+        EXTRA_ARGS=(-tag:V:0 hvc1)
+        ;;
+      mov)
+        MUXER="mov"
+        EXTRA_ARGS=(-tag:V:0 hvc1)
+        ;;
+      *)
+        SKIPPED_OTHER=$(( SKIPPED_OTHER + 1 ))
+        finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
+          "SKIP: Unsupported container: $RELATIVE_PATH"
+        continue
+        ;;
+    esac
+
+    # Write beside the source so the final rename remains on the same filesystem.
+    TEMP="${FILE}.hevc-partial"
+    ERROR_LOG="${FILE}.hevc-error.log"
+
+    rm -f "$TEMP" "$ERROR_LOG"
+
+    show_progress $(( CURRENT - 1 )) "$TRANSCODE_TOTAL" \
+      "Encoding: $RELATIVE_PATH ($CODEC -> hevc, $RESOLUTION)"
+
+    # Attempt hardware decoding and hardware encoding first.
+    if ! encode_file hardware \
+      "$FILE" "$TEMP" "$MUXER" \
+      $(( CURRENT - 1 )) "$TRANSCODE_TOTAL" \
+      "Encoding: $RELATIVE_PATH ($CODEC -> hevc, $RESOLUTION)" \
+      "$DURATION" \
+      "${EXTRA_ARGS[@]}" \
+      2>"$ERROR_LOG"
+    then
+      rm -f "$TEMP"
+
+      show_progress $(( CURRENT - 1 )) "$TRANSCODE_TOTAL" \
+        "Retrying with software decode: $RELATIVE_PATH"
+
+      # Fall back to software decoding, but continue using hardware HEVC encoding.
+      if ! encode_file software \
+        "$FILE" "$TEMP" "$MUXER" \
+        $(( CURRENT - 1 )) "$TRANSCODE_TOTAL" \
+        "Retrying with software decode: $RELATIVE_PATH" \
+        "$DURATION" \
+        "${EXTRA_ARGS[@]}" \
+        2>>"$ERROR_LOG"
+      then
+        FAILED=$(( FAILED + 1 ))
+        finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
+          "FAILED: Encode error: $RELATIVE_PATH"
+        print_detail "        Error log: $ERROR_LOG"
+        rm -f "$TEMP"
+        continue
+      fi
+    fi
+
+    OUTPUT_CODEC="$(video_codec "$TEMP")"
+    OUTPUT_RESOLUTION="$(video_resolution "$TEMP")"
+
+    if [[ "$OUTPUT_CODEC" != "hevc" ]]; then
+      FAILED=$(( FAILED + 1 ))
+      finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
+        "FAILED: Output is not HEVC: $RELATIVE_PATH"
+      rm -f "$TEMP"
+      continue
+    fi
+
+    if [[ "$OUTPUT_RESOLUTION" != "$RESOLUTION" ]]; then
+      FAILED=$(( FAILED + 1 ))
+      finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
+        "FAILED: Resolution changed $RESOLUTION -> $OUTPUT_RESOLUTION: $RELATIVE_PATH"
+      rm -f "$TEMP"
+      continue
+    fi
+
+    ORIGINAL_SIZE="$(stat -f '%z' "$FILE")"
+    OUTPUT_SIZE="$(stat -f '%z' "$TEMP")"
+
+    if (( OUTPUT_SIZE >= ORIGINAL_SIZE )); then
+      SKIPPED_LARGER=$(( SKIPPED_LARGER + 1 ))
+      finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
+        "SKIP: HEVC output is not smaller: $RELATIVE_PATH"
+      rm -f "$TEMP" "$ERROR_LOG"
+      continue
+    fi
+
+    # Preserve permissions and modification timestamp where possible.
+    chmod "$(stat -f '%Lp' "$FILE")" "$TEMP" 2>/dev/null || true
+    touch -r "$FILE" "$TEMP" 2>/dev/null || true
+
+    if mv -f "$TEMP" "$FILE"; then
+      ENCODED=$(( ENCODED + 1 ))
+      rm -f "$ERROR_LOG"
+      finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
+        "DONE: Replaced original: $RELATIVE_PATH"
+    else
+      FAILED=$(( FAILED + 1 ))
+      finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
+        "FAILED: Could not replace original: $RELATIVE_PATH"
+      rm -f "$TEMP"
+    fi
+  done
+
+  if (( INTERACTIVE )); then
+    show_progress "$TRANSCODE_TOTAL" "$TRANSCODE_TOTAL" "Transcoding complete"
+    finish_progress
+  else
+    echo
+  fi
+
+  echo "Finished processing $TOTAL_FILES files."
+  echo "  Queued for transcoding:   $TRANSCODE_TOTAL"
+  echo "  Encoded and replaced:     $ENCODED"
+  echo "  Already HEVC:             $SKIPPED_HEVC"
+  echo "  Output was not smaller:   $SKIPPED_LARGER"
+  echo "  Other files skipped:      $SKIPPED_OTHER"
+  echo "  Failed:                   $FAILED"
+}
+
+TOTAL_FILES=0
 ENCODED=0
 SKIPPED_HEVC=0
 SKIPPED_LARGER=0
 SKIPPED_OTHER=0
 FAILED=0
 TRANSCODE_FILES=()
+TRANSCODE_LIBRARIES=()
 TRANSCODE_CODECS=()
 TRANSCODE_RESOLUTIONS=()
+TRANSCODE_DURATIONS=()
 
-if (( TOTAL == 0 )); then
-  echo "No supported media files found."
-  exit 0
-fi
+print_banner
+(( INTERACTIVE )) && printf '\033[s'
 
-show_progress 0 "$TOTAL" "Scanning"
-
-for FILE in "${FILES[@]}"; do
-  SCAN_CURRENT=$(( SCAN_CURRENT + 1 ))
-  RELATIVE_PATH="$(relative_path "$FILE")"
-
-  show_progress $(( SCAN_CURRENT - 1 )) "$TOTAL" \
-    "Scanning: $RELATIVE_PATH"
-
-  CODEC="$(video_codec "$FILE")"
-  RESOLUTION="$(video_resolution "$FILE")"
-
-  if [[ -z "$CODEC" || -z "$RESOLUTION" ]]; then
-    SKIPPED_OTHER=$(( SKIPPED_OTHER + 1 ))
-    finish_item "$SCAN_CURRENT" "$TOTAL" \
-      "SCAN SKIP: Could not inspect: $RELATIVE_PATH"
-    continue
-  fi
-
-  # ffprobe reports both H.265 and HEVC as "hevc".
-  if [[ "$CODEC" == "hevc" ]]; then
-    SKIPPED_HEVC=$(( SKIPPED_HEVC + 1 ))
-    finish_item "$SCAN_CURRENT" "$TOTAL" \
-      "SCAN SKIP: Already HEVC: $RELATIVE_PATH"
-    continue
-  fi
-
-  EXT="$(printf '%s' "${FILE##*.}" | tr '[:upper:]' '[:lower:]')"
-
-  case "$EXT" in
-    mkv|mp4|m4v|mov)
-      TRANSCODE_FILES+=("$FILE")
-      TRANSCODE_CODECS+=("$CODEC")
-      TRANSCODE_RESOLUTIONS+=("$RESOLUTION")
-      finish_item "$SCAN_CURRENT" "$TOTAL" \
-        "QUEUE: $RELATIVE_PATH ($CODEC -> hevc, $RESOLUTION)"
-      ;;
-    *)
-      SKIPPED_OTHER=$(( SKIPPED_OTHER + 1 ))
-      finish_item "$SCAN_CURRENT" "$TOTAL" \
-        "SCAN SKIP: Unsupported container: $RELATIVE_PATH"
-      continue
-      ;;
-  esac
+for LIBRARY_INPUT in "${LIBRARY_INPUTS[@]}"; do
+  scan_library "$LIBRARY_INPUT"
 done
 
-TRANSCODE_TOTAL=${#TRANSCODE_FILES[@]}
-
-if (( INTERACTIVE )); then
-  show_progress "$SCAN_CURRENT" "$TOTAL" \
-    "Scan complete: $TRANSCODE_TOTAL to transcode"
-  finish_progress
-else
-  echo
-fi
-
-if (( TRANSCODE_TOTAL == 0 )); then
-  echo "Finished processing $TOTAL files."
-  echo "  Queued for transcoding:   0"
-  echo "  Encoded and replaced:     $ENCODED"
-  echo "  Already HEVC:             $SKIPPED_HEVC"
-  echo "  Output was not smaller:   $SKIPPED_LARGER"
-  echo "  Other files skipped:      $SKIPPED_OTHER"
-  echo "  Failed:                   $FAILED"
-  exit 0
-fi
-
-show_progress 0 "$TRANSCODE_TOTAL" "Transcoding"
-
-for (( CURRENT = 1; CURRENT <= TRANSCODE_TOTAL; CURRENT++ )); do
-  FILE="${TRANSCODE_FILES[$CURRENT]}"
-  CODEC="${TRANSCODE_CODECS[$CURRENT]}"
-  RESOLUTION="${TRANSCODE_RESOLUTIONS[$CURRENT]}"
-  RELATIVE_PATH="$(relative_path "$FILE")"
-
-  EXT="$(printf '%s' "${FILE##*.}" | tr '[:upper:]' '[:lower:]')"
-  EXTRA_ARGS=()
-
-  case "$EXT" in
-    mkv)
-      MUXER="matroska"
-      ;;
-    mp4|m4v)
-      MUXER="mp4"
-      EXTRA_ARGS=(-tag:V:0 hvc1)
-      ;;
-    mov)
-      MUXER="mov"
-      EXTRA_ARGS=(-tag:V:0 hvc1)
-      ;;
-    *)
-      SKIPPED_OTHER=$(( SKIPPED_OTHER + 1 ))
-      finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
-        "SKIP: Unsupported container: $RELATIVE_PATH"
-      continue
-      ;;
-  esac
-
-  # Write beside the source so the final rename remains on the same filesystem.
-  TEMP="${FILE}.hevc-partial"
-  ERROR_LOG="${FILE}.hevc-error.log"
-
-  rm -f "$TEMP" "$ERROR_LOG"
-
-  show_progress $(( CURRENT - 1 )) "$TRANSCODE_TOTAL" \
-    "Encoding: $RELATIVE_PATH ($CODEC -> hevc, $RESOLUTION)"
-
-  # Attempt hardware decoding and hardware encoding first.
-  if ! encode_file hardware \
-    "$FILE" "$TEMP" "$MUXER" "${EXTRA_ARGS[@]}" \
-    2>"$ERROR_LOG"
-  then
-    rm -f "$TEMP"
-
-    show_progress $(( CURRENT - 1 )) "$TRANSCODE_TOTAL" \
-      "Retrying with software decode: $RELATIVE_PATH"
-
-    # Fall back to software decoding, but continue using hardware HEVC encoding.
-    if ! encode_file software \
-      "$FILE" "$TEMP" "$MUXER" "${EXTRA_ARGS[@]}" \
-      2>>"$ERROR_LOG"
-    then
-      FAILED=$(( FAILED + 1 ))
-      finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
-        "FAILED: Encode error: $RELATIVE_PATH"
-      print_detail "        Error log: $ERROR_LOG"
-      rm -f "$TEMP"
-      continue
-    fi
-  fi
-
-  OUTPUT_CODEC="$(video_codec "$TEMP")"
-  OUTPUT_RESOLUTION="$(video_resolution "$TEMP")"
-
-  if [[ "$OUTPUT_CODEC" != "hevc" ]]; then
-    FAILED=$(( FAILED + 1 ))
-    finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
-      "FAILED: Output is not HEVC: $RELATIVE_PATH"
-    rm -f "$TEMP"
-    continue
-  fi
-
-  if [[ "$OUTPUT_RESOLUTION" != "$RESOLUTION" ]]; then
-    FAILED=$(( FAILED + 1 ))
-    finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
-      "FAILED: Resolution changed $RESOLUTION -> $OUTPUT_RESOLUTION: $RELATIVE_PATH"
-    rm -f "$TEMP"
-    continue
-  fi
-
-  ORIGINAL_SIZE="$(stat -f '%z' "$FILE")"
-  OUTPUT_SIZE="$(stat -f '%z' "$TEMP")"
-
-  if (( OUTPUT_SIZE >= ORIGINAL_SIZE )); then
-    SKIPPED_LARGER=$(( SKIPPED_LARGER + 1 ))
-    finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
-      "SKIP: HEVC output is not smaller: $RELATIVE_PATH"
-    rm -f "$TEMP" "$ERROR_LOG"
-    continue
-  fi
-
-  # Preserve permissions and modification timestamp where possible.
-  chmod "$(stat -f '%Lp' "$FILE")" "$TEMP" 2>/dev/null || true
-  touch -r "$FILE" "$TEMP" 2>/dev/null || true
-
-  if mv -f "$TEMP" "$FILE"; then
-    ENCODED=$(( ENCODED + 1 ))
-    rm -f "$ERROR_LOG"
-    finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
-      "DONE: Replaced original: $RELATIVE_PATH"
-  else
-    FAILED=$(( FAILED + 1 ))
-    finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
-      "FAILED: Could not replace original: $RELATIVE_PATH"
-    rm -f "$TEMP"
-  fi
-done
-
-if (( INTERACTIVE )); then
-  show_progress "$TRANSCODE_TOTAL" "$TRANSCODE_TOTAL" "Transcoding complete"
-  finish_progress
-else
-  echo
-fi
-
-echo "Finished processing $TOTAL files."
-echo "  Queued for transcoding:   $TRANSCODE_TOTAL"
-echo "  Encoded and replaced:     $ENCODED"
-echo "  Already HEVC:             $SKIPPED_HEVC"
-echo "  Output was not smaller:   $SKIPPED_LARGER"
-echo "  Other files skipped:      $SKIPPED_OTHER"
-echo "  Failed:                   $FAILED"
+transcode_all
