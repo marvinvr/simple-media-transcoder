@@ -13,7 +13,7 @@ There are capable tools for automated media transcoding, but some setups do not 
 * Copies audio tracks, subtitles, chapters, attachments, and metadata
 * Replaces the original only after verifying the output
 * Keeps the original when the transcoded file is not smaller
-* Shows file-level progress with relative paths
+* Shows separate scanning and transcoding progress with relative paths
 
 Supported containers: MKV, MP4, M4V, and MOV.
 
@@ -50,4 +50,3 @@ PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 ## Warning
 
 This script replaces original files after a successful conversion. Test it against a copied folder before running it on your full library.
-

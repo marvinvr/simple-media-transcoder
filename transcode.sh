@@ -96,7 +96,16 @@ show_progress() {
   local FILLED=0
   local EMPTY=0
   local BAR=""
+  local PREFIX=""
+  local COLUMNS_OUT=""
+  local AVAILABLE=0
+  local STATUS_LENGTH=0
+  local STATUS_START=0
   local I
+
+  if (( ! INTERACTIVE )); then
+    return
+  fi
 
   if (( TOTAL > 0 )); then
     PERCENT=$(( COMPLETED * 100 / TOTAL ))
@@ -113,26 +122,61 @@ show_progress() {
     BAR+="░"
   done
 
-  if (( INTERACTIVE )); then
-    printf '\r[%s] %3d%%  %d/%d  %s\033[K' \
-      "$BAR" "$PERCENT" "$COMPLETED" "$TOTAL" "$STATUS"
+  PREFIX="$(printf '[%s] %3d%%  %d/%d  ' \
+    "$BAR" "$PERCENT" "$COMPLETED" "$TOTAL")"
+
+  COLUMNS_OUT="$(tput cols 2>/dev/null || true)"
+  case "$COLUMNS_OUT" in
+    ''|*[!0-9]*)
+      COLUMNS_OUT=80
+      ;;
+  esac
+
+  AVAILABLE=$(( COLUMNS_OUT - ${#PREFIX} ))
+  if (( AVAILABLE < 0 )); then
+    AVAILABLE=0
   fi
+
+  STATUS_LENGTH=${#STATUS}
+  if (( STATUS_LENGTH > AVAILABLE )); then
+    if (( AVAILABLE == 0 )); then
+      STATUS=""
+    elif (( AVAILABLE <= 3 )); then
+      STATUS="${STATUS[1,$AVAILABLE]}"
+    else
+      STATUS_START=$(( STATUS_LENGTH - AVAILABLE + 4 ))
+      STATUS="...${STATUS[$STATUS_START,-1]}"
+    fi
+  fi
+
+  printf '\r%s%s\033[K' "$PREFIX" "$STATUS"
 }
 
 finish_item() {
-  local STATUS="$1"
+  local COMPLETED="$1"
+  local TOTAL="$2"
+  local STATUS="$3"
   local PERCENT=0
 
   if (( TOTAL > 0 )); then
-    PERCENT=$(( CURRENT * 100 / TOTAL ))
+    PERCENT=$(( COMPLETED * 100 / TOTAL ))
   fi
 
   if (( INTERACTIVE )); then
-    show_progress "$CURRENT" "$TOTAL" "$STATUS"
-    printf '\n'
+    show_progress "$COMPLETED" "$TOTAL" "$STATUS"
   else
     printf '[%3d%%] %d/%d  %s\n' \
-      "$PERCENT" "$CURRENT" "$TOTAL" "$STATUS"
+      "$PERCENT" "$COMPLETED" "$TOTAL" "$STATUS"
+  fi
+}
+
+print_detail() {
+  local MESSAGE="$1"
+
+  if (( INTERACTIVE )); then
+    printf '\n%s\n' "$MESSAGE"
+  else
+    printf '%s\n' "$MESSAGE"
   fi
 }
 
@@ -189,43 +233,95 @@ done < <(
 )
 
 TOTAL=${#FILES[@]}
-CURRENT=0
+SCAN_CURRENT=0
 ENCODED=0
 SKIPPED_HEVC=0
 SKIPPED_LARGER=0
 SKIPPED_OTHER=0
 FAILED=0
+TRANSCODE_FILES=()
+TRANSCODE_CODECS=()
+TRANSCODE_RESOLUTIONS=()
 
 if (( TOTAL == 0 )); then
   echo "No supported media files found."
   exit 0
 fi
 
-show_progress 0 "$TOTAL" "Starting"
-(( INTERACTIVE )) && printf '\n'
+show_progress 0 "$TOTAL" "Scanning"
 
 for FILE in "${FILES[@]}"; do
-  CURRENT=$(( CURRENT + 1 ))
+  SCAN_CURRENT=$(( SCAN_CURRENT + 1 ))
   RELATIVE_PATH="$(relative_path "$FILE")"
 
-  show_progress $(( CURRENT - 1 )) "$TOTAL" \
-    "Inspecting: $RELATIVE_PATH"
+  show_progress $(( SCAN_CURRENT - 1 )) "$TOTAL" \
+    "Scanning: $RELATIVE_PATH"
 
   CODEC="$(video_codec "$FILE")"
   RESOLUTION="$(video_resolution "$FILE")"
 
   if [[ -z "$CODEC" || -z "$RESOLUTION" ]]; then
     SKIPPED_OTHER=$(( SKIPPED_OTHER + 1 ))
-    finish_item "SKIP: Could not inspect: $RELATIVE_PATH"
+    finish_item "$SCAN_CURRENT" "$TOTAL" \
+      "SCAN SKIP: Could not inspect: $RELATIVE_PATH"
     continue
   fi
 
   # ffprobe reports both H.265 and HEVC as "hevc".
   if [[ "$CODEC" == "hevc" ]]; then
     SKIPPED_HEVC=$(( SKIPPED_HEVC + 1 ))
-    finish_item "SKIP: Already HEVC: $RELATIVE_PATH"
+    finish_item "$SCAN_CURRENT" "$TOTAL" \
+      "SCAN SKIP: Already HEVC: $RELATIVE_PATH"
     continue
   fi
+
+  EXT="$(printf '%s' "${FILE##*.}" | tr '[:upper:]' '[:lower:]')"
+
+  case "$EXT" in
+    mkv|mp4|m4v|mov)
+      TRANSCODE_FILES+=("$FILE")
+      TRANSCODE_CODECS+=("$CODEC")
+      TRANSCODE_RESOLUTIONS+=("$RESOLUTION")
+      finish_item "$SCAN_CURRENT" "$TOTAL" \
+        "QUEUE: $RELATIVE_PATH ($CODEC -> hevc, $RESOLUTION)"
+      ;;
+    *)
+      SKIPPED_OTHER=$(( SKIPPED_OTHER + 1 ))
+      finish_item "$SCAN_CURRENT" "$TOTAL" \
+        "SCAN SKIP: Unsupported container: $RELATIVE_PATH"
+      continue
+      ;;
+  esac
+done
+
+TRANSCODE_TOTAL=${#TRANSCODE_FILES[@]}
+
+if (( INTERACTIVE )); then
+  show_progress "$SCAN_CURRENT" "$TOTAL" \
+    "Scan complete: $TRANSCODE_TOTAL to transcode"
+  printf '\n'
+else
+  echo
+fi
+
+if (( TRANSCODE_TOTAL == 0 )); then
+  echo "Finished processing $TOTAL files."
+  echo "  Queued for transcoding:   0"
+  echo "  Encoded and replaced:     $ENCODED"
+  echo "  Already HEVC:             $SKIPPED_HEVC"
+  echo "  Output was not smaller:   $SKIPPED_LARGER"
+  echo "  Other files skipped:      $SKIPPED_OTHER"
+  echo "  Failed:                   $FAILED"
+  exit 0
+fi
+
+show_progress 0 "$TRANSCODE_TOTAL" "Transcoding"
+
+for (( CURRENT = 1; CURRENT <= TRANSCODE_TOTAL; CURRENT++ )); do
+  FILE="${TRANSCODE_FILES[$CURRENT]}"
+  CODEC="${TRANSCODE_CODECS[$CURRENT]}"
+  RESOLUTION="${TRANSCODE_RESOLUTIONS[$CURRENT]}"
+  RELATIVE_PATH="$(relative_path "$FILE")"
 
   EXT="$(printf '%s' "${FILE##*.}" | tr '[:upper:]' '[:lower:]')"
   EXTRA_ARGS=()
@@ -244,7 +340,8 @@ for FILE in "${FILES[@]}"; do
       ;;
     *)
       SKIPPED_OTHER=$(( SKIPPED_OTHER + 1 ))
-      finish_item "SKIP: Unsupported container: $RELATIVE_PATH"
+      finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
+        "SKIP: Unsupported container: $RELATIVE_PATH"
       continue
       ;;
   esac
@@ -255,7 +352,7 @@ for FILE in "${FILES[@]}"; do
 
   rm -f "$TEMP" "$ERROR_LOG"
 
-  show_progress $(( CURRENT - 1 )) "$TOTAL" \
+  show_progress $(( CURRENT - 1 )) "$TRANSCODE_TOTAL" \
     "Encoding: $RELATIVE_PATH ($CODEC -> hevc, $RESOLUTION)"
 
   # Attempt hardware decoding and hardware encoding first.
@@ -265,7 +362,7 @@ for FILE in "${FILES[@]}"; do
   then
     rm -f "$TEMP"
 
-    show_progress $(( CURRENT - 1 )) "$TOTAL" \
+    show_progress $(( CURRENT - 1 )) "$TRANSCODE_TOTAL" \
       "Retrying with software decode: $RELATIVE_PATH"
 
     # Fall back to software decoding, but continue using hardware HEVC encoding.
@@ -274,8 +371,9 @@ for FILE in "${FILES[@]}"; do
       2>>"$ERROR_LOG"
     then
       FAILED=$(( FAILED + 1 ))
-      finish_item "FAILED: Encode error: $RELATIVE_PATH"
-      echo "        Error log: $ERROR_LOG"
+      finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
+        "FAILED: Encode error: $RELATIVE_PATH"
+      print_detail "        Error log: $ERROR_LOG"
       rm -f "$TEMP"
       continue
     fi
@@ -286,14 +384,15 @@ for FILE in "${FILES[@]}"; do
 
   if [[ "$OUTPUT_CODEC" != "hevc" ]]; then
     FAILED=$(( FAILED + 1 ))
-    finish_item "FAILED: Output is not HEVC: $RELATIVE_PATH"
+    finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
+      "FAILED: Output is not HEVC: $RELATIVE_PATH"
     rm -f "$TEMP"
     continue
   fi
 
   if [[ "$OUTPUT_RESOLUTION" != "$RESOLUTION" ]]; then
     FAILED=$(( FAILED + 1 ))
-    finish_item \
+    finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
       "FAILED: Resolution changed $RESOLUTION -> $OUTPUT_RESOLUTION: $RELATIVE_PATH"
     rm -f "$TEMP"
     continue
@@ -304,7 +403,8 @@ for FILE in "${FILES[@]}"; do
 
   if (( OUTPUT_SIZE >= ORIGINAL_SIZE )); then
     SKIPPED_LARGER=$(( SKIPPED_LARGER + 1 ))
-    finish_item "SKIP: HEVC output is not smaller: $RELATIVE_PATH"
+    finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
+      "SKIP: HEVC output is not smaller: $RELATIVE_PATH"
     rm -f "$TEMP" "$ERROR_LOG"
     continue
   fi
@@ -316,20 +416,27 @@ for FILE in "${FILES[@]}"; do
   if mv -f "$TEMP" "$FILE"; then
     ENCODED=$(( ENCODED + 1 ))
     rm -f "$ERROR_LOG"
-    finish_item "DONE: Replaced original: $RELATIVE_PATH"
+    finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
+      "DONE: Replaced original: $RELATIVE_PATH"
   else
     FAILED=$(( FAILED + 1 ))
-    finish_item "FAILED: Could not replace original: $RELATIVE_PATH"
+    finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
+      "FAILED: Could not replace original: $RELATIVE_PATH"
     rm -f "$TEMP"
   fi
 done
 
-echo
+if (( INTERACTIVE )); then
+  show_progress "$TRANSCODE_TOTAL" "$TRANSCODE_TOTAL" "Transcoding complete"
+  printf '\n'
+else
+  echo
+fi
+
 echo "Finished processing $TOTAL files."
+echo "  Queued for transcoding:   $TRANSCODE_TOTAL"
 echo "  Encoded and replaced:     $ENCODED"
 echo "  Already HEVC:             $SKIPPED_HEVC"
 echo "  Output was not smaller:   $SKIPPED_LARGER"
 echo "  Other files skipped:      $SKIPPED_OTHER"
 echo "  Failed:                   $FAILED"
-
-
