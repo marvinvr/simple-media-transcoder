@@ -57,7 +57,24 @@ fi
 # Use a progress bar in Terminal, but keep redirected cron logs readable.
 INTERACTIVE=0
 [[ -t 1 ]] && INTERACTIVE=1
-PROGRESS_ROWS=0
+PROGRESS_ACTIVE=0
+
+print_banner() {
+  if (( INTERACTIVE )); then
+    printf '\033[1;36m'
+    printf '   _____ __  ________\n'
+    printf '  / ___//  |/  /_  __/\n'
+    printf '  \\__ \\/ /|_/ / / /\n'
+    printf ' ___/ / /  / / / /\n'
+    printf '/____/_/  /_/ /_/\n'
+    printf '\033[0m\033[1m   simple-media-transcoder\033[0m\n'
+    printf '\033[2m   HEVC library cleanup by marvinvr\033[0m\n'
+    printf '\033[2m   \033]8;;https://marvinvr.ch\033\\marvinvr.ch\033]8;;\033\\\033[0m\n\n'
+  else
+    printf 'simple-media-transcoder by marvinvr\n'
+    printf 'https://marvinvr.ch\n\n'
+  fi
+}
 
 video_codec() {
   ffprobe \
@@ -98,8 +115,6 @@ show_progress() {
   local EMPTY=0
   local BAR=""
   local PREFIX=""
-  local COLUMNS_OUT=""
-  local STATUS_ROWS=1
   local I
 
   if (( ! INTERACTIVE )); then
@@ -124,24 +139,9 @@ show_progress() {
   PREFIX="$(printf '[%s] %3d%%  %d/%d  ' \
     "$BAR" "$PERCENT" "$COMPLETED" "$TOTAL")"
 
-  if (( PROGRESS_ROWS > 0 )); then
-    printf '\r\033[2K'
-    for (( I = 1; I < PROGRESS_ROWS; I++ )); do
-      printf '\033[1A\r\033[2K'
-    done
-  fi
-
-  COLUMNS_OUT="$(tput cols 2>/dev/null || true)"
-  case "$COLUMNS_OUT" in
-    ''|*[!0-9]*)
-      COLUMNS_OUT=80
-      ;;
-  esac
-
-  STATUS_ROWS=$(( ${#STATUS} / COLUMNS_OUT + 1 ))
-  PROGRESS_ROWS=$(( STATUS_ROWS + 1 ))
-
-  printf '%s\n%s\033[K' "$PREFIX" "$STATUS"
+  printf '\033[u\033[J'
+  printf '%s\n%s' "$PREFIX" "$STATUS"
+  PROGRESS_ACTIVE=1
 }
 
 finish_item() {
@@ -163,9 +163,10 @@ finish_item() {
 }
 
 finish_progress() {
-  if (( INTERACTIVE && PROGRESS_ROWS > 0 )); then
+  if (( INTERACTIVE && PROGRESS_ACTIVE )); then
     printf '\n'
-    PROGRESS_ROWS=0
+    printf '\033[s'
+    PROGRESS_ACTIVE=0
   fi
 }
 
@@ -175,6 +176,7 @@ print_detail() {
   if (( INTERACTIVE )); then
     finish_progress
     printf '%s\n' "$MESSAGE"
+    printf '\033[s'
   else
     printf '%s\n' "$MESSAGE"
   fi
@@ -217,6 +219,9 @@ encode_file() {
     -f "$MUXER" \
     "$OUTPUT"
 }
+
+print_banner
+(( INTERACTIVE )) && printf '\033[s'
 
 # Build the list first so the script knows the total file count.
 FILES=()
