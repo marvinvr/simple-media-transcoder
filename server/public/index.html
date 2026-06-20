@@ -1,0 +1,1835 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="robots" content="noindex">
+<title>SMT · simple-media-transcoder</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-elev: #161b22;
+    --bg-elev2: #1b222c;
+    --border: #232b36;
+    --border-soft: #20262f;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --faint: #6e7681;
+    --accent: #2ea043;
+    --accent-hover: #3fb950;
+    --blue: #2f81f7;
+    --danger: #f85149;
+    --danger-bg: rgba(248, 81, 73, 0.12);
+    --green-bg: rgba(46, 160, 67, 0.14);
+    --grey-bg: rgba(139, 148, 158, 0.14);
+    --radius: 14px;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .wrap {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 16px;
+  }
+
+  /* ---------- Header ---------- */
+  header.bar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: rgba(13, 17, 23, 0.85);
+    backdrop-filter: saturate(140%) blur(10px);
+    -webkit-backdrop-filter: saturate(140%) blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .bar-inner {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .logo {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, #2ea043, #1f6feb);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 11px;
+    color: #fff;
+    flex: 0 0 auto;
+  }
+
+  .title h1 {
+    font-size: 15px;
+    margin: 0;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .title h1 .dim { color: var(--muted); font-weight: 400; }
+
+  .spacer { flex: 1 1 auto; }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 11px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-elev);
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .pill .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--faint);
+    flex: 0 0 auto;
+  }
+
+  .pill.running { color: var(--accent-hover); border-color: rgba(46, 160, 67, 0.4); }
+  .pill.running .dot { background: var(--accent-hover); animation: pulse 1.4s ease-in-out infinite; }
+
+  .pill .sched {
+    color: var(--muted);
+    font-weight: 400;
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.55); opacity: 1; }
+    50% { box-shadow: 0 0 0 5px rgba(63, 185, 80, 0); opacity: 0.6; }
+  }
+
+  .iconbtn {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 9px;
+    width: 34px;
+    height: 34px;
+    font-size: 16px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .iconbtn:hover { background: var(--bg-elev2); border-color: #2d3744; }
+
+  .linkbtn {
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-size: 13px;
+    cursor: pointer;
+    padding: 6px 4px;
+    font-family: var(--sans);
+    white-space: nowrap;
+  }
+  .linkbtn:hover { color: var(--text); text-decoration: underline; }
+
+  /* ---------- Reconnect banner ---------- */
+  .reconnect {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #e3b341;
+    background: rgba(227, 179, 65, 0.1);
+    border: 1px solid rgba(227, 179, 65, 0.3);
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-top: 14px;
+  }
+  .reconnect.show { display: flex; }
+  .reconnect .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #e3b341; animation: pulse 1.2s ease-in-out infinite;
+  }
+
+  /* ---------- Controls ---------- */
+  .controls {
+    display: flex;
+    gap: 10px;
+    margin-top: 18px;
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    appearance: none;
+    border: 1px solid var(--border);
+    background: var(--bg-elev);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    font-weight: 600;
+    padding: 10px 18px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .btn:hover:not(:disabled) { background: var(--bg-elev2); }
+  .btn:disabled { opacity: 0.45; cursor: default; }
+
+  .btn-primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+  .btn-danger {
+    color: var(--danger);
+    border-color: rgba(248, 81, 73, 0.4);
+  }
+  .btn-danger:hover:not(:disabled) { background: var(--danger-bg); }
+
+  /* ---------- Cards ---------- */
+  .card {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px;
+    margin-top: 18px;
+  }
+
+  .card h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin: 0 0 14px;
+    font-weight: 600;
+  }
+
+  .card .head-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .card .head-row h2 { margin: 0; }
+
+  .mono { font-family: var(--mono); }
+  .hidden { display: none !important; }
+
+  /* ---------- Progress card ---------- */
+  .phase {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--blue);
+    background: rgba(47, 129, 247, 0.12);
+    border: 1px solid rgba(47, 129, 247, 0.3);
+    padding: 4px 10px;
+    border-radius: 999px;
+  }
+  .phase.transcoding { color: var(--accent-hover); background: var(--green-bg); border-color: rgba(46,160,67,0.35); }
+
+  .prog-section { margin-top: 16px; }
+
+  /* Stacked live-transcode cards (one per concurrent worker). */
+  .file-card + .file-card {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-soft);
+  }
+
+  .prog-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 7px;
+    gap: 10px;
+  }
+  .prog-meta .right { font-family: var(--mono); color: var(--text); }
+
+  .progress {
+    height: 9px;
+    background: var(--bg);
+    border: 1px solid var(--border-soft);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .progress > i {
+    display: block;
+    height: 100%;
+    width: 0;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #1f6feb, #2ea043);
+    transition: width 0.4s ease;
+  }
+  .progress.file > i {
+    background: linear-gradient(90deg, #2ea043, #3fb950);
+  }
+
+  .curfile {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 8px;
+    direction: rtl;
+    text-align: left;
+  }
+  .curfile bdi { direction: ltr; unicode-bidi: bidi-override; }
+
+  .curfile-sub {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--faint);
+    margin-top: 7px;
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 16px;
+  }
+  .chip {
+    font-size: 12px;
+    padding: 5px 11px;
+    border-radius: 999px;
+    background: var(--grey-bg);
+    color: var(--muted);
+    font-weight: 500;
+  }
+  .chip b { color: var(--text); font-weight: 700; }
+  .chip.ok b { color: var(--accent-hover); }
+  .chip.warn b { color: #e3b341; }
+  .chip.bad b { color: var(--danger); }
+
+  .elapsed {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .elapsed b { color: var(--text); font-family: var(--mono); }
+
+  /* ---------- Lifetime stats ---------- */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+  .stat {
+    background: var(--bg);
+    border: 1px solid var(--border-soft);
+    border-radius: 11px;
+    padding: 14px;
+  }
+  .stat .num {
+    font-size: 24px;
+    font-weight: 700;
+    font-family: var(--mono);
+    line-height: 1.1;
+    letter-spacing: -0.5px;
+  }
+  .stat .lbl {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .stat.green .num { color: var(--accent-hover); }
+  .stat.red .num { color: var(--danger); }
+  .last-run { font-size: 12px; color: var(--muted); }
+
+  /* ---------- Table ---------- */
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  thead th {
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--faint);
+    font-weight: 600;
+    padding: 0 12px 9px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  tbody td {
+    padding: 11px 12px;
+    border-bottom: 1px solid var(--border-soft);
+    vertical-align: middle;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+
+  td.file {
+    font-family: var(--mono);
+    max-width: 340px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  td.size, td.saved { font-family: var(--mono); white-space: nowrap; }
+  .arrow { color: var(--faint); }
+  .saved-good { color: var(--accent-hover); }
+  .saved-muted { color: var(--muted); }
+  td.when { color: var(--muted); white-space: nowrap; font-size: 12px; }
+
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .badge.replaced { background: var(--green-bg); color: var(--accent-hover); }
+  .badge.kept { background: var(--grey-bg); color: var(--muted); }
+  .badge.failed { background: var(--danger-bg); color: var(--danger); }
+  .badge.other { background: var(--grey-bg); color: var(--muted); }
+
+  .empty {
+    text-align: center;
+    color: var(--faint);
+    padding: 26px 10px;
+    font-size: 13px;
+  }
+
+  /* ---------- Past runs ---------- */
+  .runs-list { display: flex; flex-direction: column; gap: 1px; }
+  .run-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 4px;
+    border-bottom: 1px solid var(--border-soft);
+    font-size: 13px;
+    flex-wrap: wrap;
+  }
+  .run-row:last-child { border-bottom: none; }
+  .run-row .when { color: var(--muted); min-width: 130px; }
+  .run-row .trig {
+    font-size: 11px;
+    color: var(--faint);
+    border: 1px solid var(--border);
+    padding: 1px 7px;
+    border-radius: 6px;
+  }
+  .run-row .counts { color: var(--text); font-family: var(--mono); font-size: 12px; }
+  .run-row .saved { margin-left: auto; font-family: var(--mono); font-weight: 600; }
+  .run-row .rstatus { font-size: 11px; font-weight: 600; }
+  .rstatus.completed { color: var(--accent-hover); }
+  .rstatus.running { color: var(--blue); }
+  .rstatus.stopped { color: #e3b341; }
+  .rstatus.failed { color: var(--danger); }
+
+  /* ---------- Modal ---------- */
+  .modal-back {
+    position: fixed;
+    inset: 0;
+    background: rgba(1, 4, 9, 0.7);
+    display: none;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 20px;
+    overflow-y: auto;
+    z-index: 50;
+  }
+  .modal-back.show { display: flex; }
+  .modal {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    width: 100%;
+    max-width: 540px;
+    margin: auto;
+    box-shadow: 0 24px 70px rgba(0,0,0,0.5);
+  }
+  .modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .modal-head h2 { margin: 0; font-size: 16px; text-transform: none; letter-spacing: 0; color: var(--text); }
+  .modal-body { padding: 20px; }
+  .modal-foot {
+    padding: 16px 20px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+  }
+
+  .field { margin-bottom: 22px; }
+  .field:last-child { margin-bottom: 0; }
+  .field > label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .field .help { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+  .txt, .modal input[type="time"] {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    color: var(--text);
+    font-size: 15px;
+    padding: 9px 11px;
+    outline: none;
+    font-family: var(--mono);
+  }
+  .txt:focus, .modal input[type="time"]:focus {
+    border-color: var(--blue);
+    box-shadow: 0 0 0 3px rgba(47,129,247,0.22);
+  }
+
+  .path-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+    align-items: center;
+  }
+  .path-row .txt { flex: 1 1 auto; }
+  .path-remove {
+    flex: 0 0 auto;
+    width: 36px;
+    height: 36px;
+    border-radius: 9px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 16px;
+  }
+  .path-remove:hover { color: var(--danger); border-color: rgba(248,81,73,0.4); }
+  .addpath {
+    margin-top: 4px;
+    background: none;
+    border: 1px dashed var(--border);
+    color: var(--muted);
+    border-radius: 9px;
+    padding: 8px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    width: 100%;
+    font-family: var(--sans);
+  }
+  .addpath:hover { color: var(--text); border-color: #3a4452; }
+
+  /* ---------- Library editor rows ---------- */
+  .lib-row {
+    border: 1px solid var(--border-soft);
+    background: var(--bg);
+    border-radius: 11px;
+    padding: 12px;
+    margin-bottom: 10px;
+  }
+  .lib-row .lib-path-line {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .lib-row .lib-path-line .txt { flex: 1 1 auto; }
+  .lib-row .lib-controls {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+  }
+  .lib-row .lib-quality {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1 1 auto;
+    min-width: 180px;
+  }
+  .lib-row .lib-quality > span.lbl {
+    font-size: 12px;
+    color: var(--muted);
+    flex: 0 0 auto;
+  }
+  .lib-row .lib-quality input[type="range"] { flex: 1 1 auto; }
+  .lib-row .lib-quality .range-val {
+    font-size: 14px;
+    min-width: 30px;
+  }
+  .lib-row .lib-enabled {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    color: var(--muted);
+    flex: 0 0 auto;
+  }
+  .lib-row .lib-enabled input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); }
+
+  .range-row { display: flex; align-items: center; gap: 14px; }
+  input[type="range"] {
+    flex: 1 1 auto;
+    accent-color: var(--accent);
+    height: 22px;
+  }
+  .range-val {
+    font-family: var(--mono);
+    font-size: 16px;
+    font-weight: 700;
+    min-width: 38px;
+    text-align: right;
+  }
+
+  .check-row { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; }
+  .check-row input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent); }
+  .check-row label { font-size: 14px; }
+
+  .sched-time { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .sched-time label { font-size: 13px; color: var(--muted); }
+  .sched-time input[type="time"] { width: auto; }
+
+  .days { display: flex; gap: 6px; flex-wrap: wrap; }
+  .day {
+    width: 38px;
+    height: 36px;
+    border-radius: 9px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: var(--sans);
+  }
+  .day.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .sched-disabled { opacity: 0.45; pointer-events: none; }
+
+  /* ---------- Toast ---------- */
+  .toasts {
+    position: fixed;
+    left: 50%;
+    bottom: calc(20px + env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: center;
+    pointer-events: none;
+    width: max-content;
+    max-width: 90vw;
+  }
+  .toast {
+    background: var(--bg-elev2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 13px;
+    padding: 11px 16px;
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.2s, transform 0.2s;
+    max-width: 100%;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast.ok { border-color: rgba(46,160,67,0.5); }
+  .toast.err { border-color: rgba(248,81,73,0.5); color: #ffb3ad; }
+
+  .muted-note { color: var(--muted); font-size: 13px; }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 720px) {
+    .stats-grid { grid-template-columns: repeat(2, 1fr); }
+    .title h1 .dim { display: none; }
+    .bar-inner { gap: 8px; padding: 10px 14px; }
+    .linkbtn { display: none; }
+    .pill .sched { display: none; }
+  }
+
+  @media (max-width: 600px) {
+    /* Collapse table into stacked cards */
+    table thead { display: none; }
+    table, tbody, tr, td { display: block; width: 100%; }
+    tbody tr {
+      background: var(--bg);
+      border: 1px solid var(--border-soft);
+      border-radius: 11px;
+      padding: 12px 14px;
+      margin-bottom: 10px;
+    }
+    tbody td {
+      border: none !important;
+      padding: 3px 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 14px;
+    }
+    tbody td::before {
+      content: attr(data-label);
+      color: var(--faint);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      flex: 0 0 auto;
+    }
+    td.file {
+      max-width: none;
+      font-size: 12px;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+    }
+    td.file::before { margin-bottom: 2px; }
+    td.file .fname { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .run-row .when { min-width: 0; }
+    .run-row .saved { width: 100%; margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <div class="bar-inner">
+    <div class="title">
+      <div class="logo">SMT</div>
+      <h1>SMT<span class="dim"> · simple-media-transcoder</span></h1>
+    </div>
+    <div class="spacer"></div>
+    <span class="pill" id="statusPill">
+      <span class="dot"></span>
+      <span id="pillText">…</span>
+      <span class="sched" id="pillSched"></span>
+    </span>
+    <button class="iconbtn" id="gearBtn" title="Settings" aria-label="Settings">⚙</button>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="reconnect" id="reconnect">
+    <span class="dot"></span><span>Reconnecting…</span>
+  </div>
+
+  <!-- Controls -->
+  <div class="controls">
+    <button class="btn btn-primary" id="runBtn">▶ Run now</button>
+    <button class="btn btn-danger" id="stopBtn" disabled>■ Stop</button>
+  </div>
+  <div class="muted-note" style="margin-top: 8px;">Runs all enabled libraries.</div>
+
+  <!-- Live progress -->
+  <section class="card hidden" id="progressCard">
+    <div class="head-row">
+      <span class="phase" id="phaseLabel">Scanning…</span>
+      <span class="elapsed">Elapsed <b id="elapsed">0:00</b></span>
+    </div>
+
+    <div class="prog-section">
+      <div class="prog-meta">
+        <span id="overallLabel">Overall</span>
+        <span class="right" id="overallNum">0 / 0</span>
+      </div>
+      <div class="progress"><i id="overallBar"></i></div>
+      <div class="curfile-sub hidden" id="libraryLine"></div>
+      <div class="curfile-sub hidden" id="scanLine"></div>
+    </div>
+
+    <div class="prog-section hidden" id="fileBlocks"></div>
+
+    <div class="chips">
+      <span class="chip ok">encoded <b id="cEncoded">0</b></span>
+      <span class="chip warn">kept <b id="cKept">0</b></span>
+      <span class="chip hidden" id="chipSkipped" title="Already evaluated and kept at this quality on a previous run — skipped without re-encoding">skipped <b id="cSkipped">0</b></span>
+      <span class="chip bad">failed <b id="cFailed">0</b></span>
+    </div>
+  </section>
+
+  <!-- Lifetime stats -->
+  <section class="card">
+    <div class="head-row">
+      <h2>Lifetime</h2>
+      <span class="last-run" id="lastRun"></span>
+    </div>
+    <div class="stats-grid">
+      <div class="stat green">
+        <div class="num" id="sFiles">—</div>
+        <div class="lbl">Files transcoded</div>
+      </div>
+      <div class="stat green">
+        <div class="num" id="sSaved">—</div>
+        <div class="lbl">Saved</div>
+      </div>
+      <div class="stat">
+        <div class="num" id="sKept">—</div>
+        <div class="lbl">Kept (larger)</div>
+      </div>
+      <div class="stat red">
+        <div class="num" id="sFailed">—</div>
+        <div class="lbl">Failed</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Recent files -->
+  <section class="card">
+    <h2>Recent files</h2>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Before → After</th>
+            <th>Saved</th>
+            <th>Quality</th>
+            <th>Status</th>
+            <th>When</th>
+          </tr>
+        </thead>
+        <tbody id="historyBody">
+          <tr><td colspan="6" class="empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Past runs -->
+  <section class="card">
+    <h2>Past runs</h2>
+    <div class="runs-list" id="runsList">
+      <div class="empty">Loading…</div>
+    </div>
+  </section>
+
+</div>
+
+<!-- Settings modal -->
+<div class="modal-back" id="settingsBack">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Settings">
+    <div class="modal-head">
+      <h2>Settings</h2>
+      <button class="iconbtn" id="closeSettings" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body" id="settingsBody">
+      <div class="muted-note" id="settingsLoading">Loading…</div>
+
+      <div id="settingsForm" class="hidden">
+        <div class="field">
+          <label>Libraries</label>
+          <div id="libList"></div>
+          <button class="addpath" id="addLibrary" type="button">+ Add library</button>
+          <div class="help">Each library is transcoded at its own quality. Higher = better quality, larger files.</div>
+        </div>
+
+        <div class="field">
+          <label>Default quality for new libraries</label>
+          <div class="range-row">
+            <input type="range" id="defaultQuality" min="1" max="100" value="70">
+            <span class="range-val" id="defaultQualityVal">70</span>
+          </div>
+          <div class="help">Used to prefill the quality of newly added libraries.</div>
+        </div>
+
+        <div class="field">
+          <label>Concurrent transcodes</label>
+          <div class="range-row">
+            <input type="range" id="concurrency" min="1" max="8" value="3">
+            <span class="range-val" id="concurrencyVal">3</span>
+          </div>
+          <div class="help">How many files to transcode at the same time. Higher uses more CPU/GPU and disk I/O.</div>
+        </div>
+
+        <div class="field">
+          <label>Schedule</label>
+          <div class="check-row">
+            <input type="checkbox" id="schedEnabled">
+            <label for="schedEnabled">Run automatically</label>
+          </div>
+          <div id="schedDetail">
+            <div class="sched-time">
+              <label for="schedTime">At</label>
+              <input type="time" id="schedTime" value="03:00">
+            </div>
+            <div class="days" id="dayToggles"></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="cancelSettings">Cancel</button>
+      <button class="btn btn-primary" id="saveSettings">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ============ Helpers ============ */
+
+  function $(id) { return document.getElementById(id); }
+
+  function formatBytes(n) {
+    if (n === null || n === undefined || isNaN(n)) return "—";
+    n = Number(n);
+    if (n < 0) n = 0;
+    var units = ["B", "KB", "MB", "GB", "TB", "PB"];
+    var i = 0;
+    var v = n;
+    while (v >= 1024 && i < units.length - 1) {
+      v /= 1024;
+      i++;
+    }
+    if (i === 0) return v + " B";
+    return v.toFixed(2) + " " + units[i];
+  }
+
+  function formatDuration(sec) {
+    if (sec === null || sec === undefined || isNaN(sec)) return "0:00";
+    sec = Math.max(0, Math.floor(Number(sec)));
+    var h = Math.floor(sec / 3600);
+    var m = Math.floor((sec % 3600) / 60);
+    var s = sec % 60;
+    function pad(x) { return x < 10 ? "0" + x : "" + x; }
+    if (h > 0) return h + ":" + pad(m) + ":" + pad(s);
+    return m + ":" + pad(s);
+  }
+
+  // Short ETA style like "2m", "1h 4m", "45s", "—".
+  function formatEta(sec) {
+    if (sec === null || sec === undefined || isNaN(sec)) return "—";
+    sec = Math.max(0, Math.floor(Number(sec)));
+    if (sec < 60) return sec + "s";
+    var h = Math.floor(sec / 3600);
+    var m = Math.floor((sec % 3600) / 60);
+    if (h > 0) return h + "h " + m + "m";
+    return m + "m";
+  }
+
+  function formatWhen(iso) {
+    if (!iso) return "—";
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return "—";
+    var now = Date.now();
+    var diff = Math.round((now - d.getTime()) / 1000);
+    if (diff < 0) diff = 0;
+    if (diff < 45) return "just now";
+    if (diff < 90) return "1 min ago";
+    if (diff < 3600) return Math.round(diff / 60) + " min ago";
+    if (diff < 5400) return "1 hour ago";
+    if (diff < 86400) return Math.round(diff / 3600) + " hours ago";
+    if (diff < 172800) return "yesterday";
+    if (diff < 7 * 86400) return Math.round(diff / 86400) + " days ago";
+    // Absolute for older
+    var months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    var sameYear = d.getFullYear() === new Date().getFullYear();
+    var base = months[d.getMonth()] + " " + d.getDate();
+    return sameYear ? base : base + ", " + d.getFullYear();
+  }
+
+  function formatDateTime(iso) {
+    if (!iso) return "—";
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return "—";
+    var months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    function pad(x) { return x < 10 ? "0" + x : "" + x; }
+    return months[d.getMonth()] + " " + d.getDate() + ", " +
+      pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+
+  function basename(p) {
+    if (!p) return "";
+    var s = String(p);
+    var idx = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
+    return idx >= 0 ? s.slice(idx + 1) : s;
+  }
+
+  var toastWrap = $("toasts");
+  function toast(msg, kind) {
+    var el = document.createElement("div");
+    el.className = "toast" + (kind ? " " + kind : "");
+    el.textContent = msg;
+    toastWrap.appendChild(el);
+    // force reflow then show
+    void el.offsetWidth;
+    el.classList.add("show");
+    setTimeout(function () {
+      el.classList.remove("show");
+      setTimeout(function () {
+        if (el.parentNode) el.parentNode.removeChild(el);
+      }, 250);
+    }, 3000);
+  }
+
+  // Wrapper: fetch JSON, return parsed JSON.
+  // Throws on network error or non-2xx (after attaching .status/.body).
+  function api(path, options) {
+    options = options || {};
+    return fetch(path, options).then(function (res) {
+      return res.text().then(function (text) {
+        var body = null;
+        if (text) {
+          try { body = JSON.parse(text); } catch (e) { body = null; }
+        }
+        if (!res.ok) {
+          var err = new Error("HTTP " + res.status);
+          err.status = res.status;
+          err.body = body;
+          throw err;
+        }
+        return body;
+      });
+    });
+  }
+
+  /* ============ Connection indicator ============ */
+
+  var reconnectEl = $("reconnect");
+  function setOnline(ok) {
+    if (ok) reconnectEl.classList.remove("show");
+    else reconnectEl.classList.add("show");
+  }
+
+  /* ============ State ============ */
+
+  var lastStatus = null;      // "idle" | "running"
+  var statusTimer = null;
+  var slowTimer = null;
+  var configCache = null;
+
+  /* ============ Header pill + controls ============ */
+
+  var pill = $("statusPill");
+  var pillText = $("pillText");
+  var pillSched = $("pillSched");
+  var runBtn = $("runBtn");
+  var stopBtn = $("stopBtn");
+
+  function renderStatus(data) {
+    var status = data.status;
+    var running = status === "running";
+
+    // Pill
+    if (running) {
+      pill.classList.add("running");
+      pillText.textContent = "Running";
+    } else {
+      pill.classList.remove("running");
+      pillText.textContent = "Idle";
+    }
+
+    // Scheduled hint
+    if (data.schedule && data.schedule.enabled && data.schedule.time) {
+      pillSched.textContent = "Scheduled " + data.schedule.time;
+    } else {
+      pillSched.textContent = "";
+    }
+
+    // Buttons
+    runBtn.disabled = running;
+    stopBtn.disabled = !running;
+
+    // Progress card
+    if (running && data.run) {
+      renderProgress(data.run);
+      $("progressCard").classList.remove("hidden");
+    } else {
+      $("progressCard").classList.add("hidden");
+    }
+
+    // Detect running -> idle transition: refresh slow data immediately.
+    if (lastStatus === "running" && status === "idle") {
+      loadSlow();
+    }
+    lastStatus = status;
+  }
+
+  var phaseLabel = $("phaseLabel");
+  var overallNum = $("overallNum");
+  var overallBar = $("overallBar");
+  var fileBlocks = $("fileBlocks");
+  var fileCards = {}; // slot -> { card, name, bdi, right, bar, sub }
+
+  // Build the DOM for one live-transcode card. Reused across polls (keyed by
+  // worker slot) so the progress bars animate smoothly instead of resetting.
+  function createFileCard() {
+    var card = document.createElement("div");
+    card.className = "file-card";
+
+    var name = document.createElement("div");
+    name.className = "curfile";
+    var bdi = document.createElement("bdi");
+    name.appendChild(bdi);
+    card.appendChild(name);
+
+    var meta = document.createElement("div");
+    meta.className = "prog-meta";
+    var right = document.createElement("span");
+    right.className = "right";
+    meta.appendChild(right);
+    card.appendChild(meta);
+
+    var prog = document.createElement("div");
+    prog.className = "progress file";
+    var bar = document.createElement("i");
+    prog.appendChild(bar);
+    card.appendChild(prog);
+
+    var sub = document.createElement("div");
+    sub.className = "curfile-sub";
+    card.appendChild(sub);
+
+    return { card: card, name: name, bdi: bdi, right: right, bar: bar, sub: sub };
+  }
+
+  function updateFileCard(node, cur) {
+    var rel = cur.relPath || cur.path || "—";
+    if (node.bdi.textContent !== rel) node.bdi.textContent = rel;
+    node.name.title = cur.path || rel;
+
+    var pct = Math.max(0, Math.min(100, Math.round(cur.pct || 0)));
+    node.bar.style.width = pct + "%";
+
+    var parts = [pct + "%"];
+    if (cur.fps && cur.fps !== "?" && cur.fps !== "N/A") parts.push(cur.fps + " fps");
+    if (cur.speed && cur.speed !== "?" && cur.speed !== "N/A") parts.push(cur.speed);
+    parts.push("ETA " + formatEta(cur.etaSec));
+    node.right.textContent = parts.join("  ");
+
+    var codec = cur.codec || "?";
+    var sub = codec + " → hevc";
+    if (cur.res) sub += " · " + cur.res;
+    if (cur.decode && cur.decode !== "-") sub += " · " + cur.decode;
+    if (cur.quality != null) sub += " · q" + cur.quality;
+    node.sub.textContent = sub;
+  }
+
+  // Reconcile the active-file cards against run.active, keyed by worker slot.
+  function renderActiveFiles(run) {
+    var active = (run.active || []);
+    var present = {};
+    active.forEach(function (c) { present[c.slot] = true; });
+
+    // Drop cards for slots that are no longer transcoding.
+    Object.keys(fileCards).forEach(function (slot) {
+      if (!present[slot]) {
+        var n = fileCards[slot];
+        if (n.card.parentNode) n.card.parentNode.removeChild(n.card);
+        delete fileCards[slot];
+      }
+    });
+
+    if (run.phase !== "transcoding" || active.length === 0) {
+      fileBlocks.classList.add("hidden");
+      return;
+    }
+    fileBlocks.classList.remove("hidden");
+
+    // Upsert in slot order (appendChild moves existing nodes, keeping order).
+    active.slice().sort(function (a, b) { return a.slot - b.slot; }).forEach(function (cur) {
+      var node = fileCards[cur.slot];
+      if (!node) { node = createFileCard(); fileCards[cur.slot] = node; }
+      fileBlocks.appendChild(node.card);
+      updateFileCard(node, cur);
+    });
+  }
+
+  function renderProgress(run) {
+    // Phase
+    var scanning = run.phase === "scanning";
+    if (scanning) {
+      phaseLabel.textContent = "Scanning…";
+      phaseLabel.classList.remove("transcoding");
+    } else {
+      phaseLabel.textContent = "Transcoding";
+      phaseLabel.classList.add("transcoding");
+    }
+
+    if (!scanning && run.concurrency > 1) {
+      phaseLabel.textContent = "Transcoding · " + run.concurrency + "×";
+    }
+
+    $("elapsed").textContent = formatDuration(run.elapsedSec);
+
+    // Overall bar — during scanning it tracks scan progress (files probed in the
+    // current library), during transcoding it tracks files completed overall.
+    var idx, total;
+    if (scanning && run.scan) {
+      $("overallLabel").textContent = "Scanning";
+      idx = run.scan.index || 0;
+      total = run.scan.total || 0;
+    } else {
+      $("overallLabel").textContent = "Overall";
+      idx = run.completed || 0;
+      total = run.queueTotal || 0;
+    }
+    overallNum.textContent = idx + " / " + total;
+    var op = total > 0 ? Math.min(100, (idx / total) * 100) : 0;
+    overallBar.style.width = op + "%";
+
+    // Library line — only meaningful while scanning a specific library.
+    var libLine = $("libraryLine");
+    var curLib = run.currentLibrary;
+    var libTotal = run.libraryTotal || 0;
+    if (scanning && curLib && (libTotal > 1 || run.libraryIndex)) {
+      var libName = curLib.label || curLib.path || "—";
+      var libText = "Library " + (run.libraryIndex || 0) + "/" + libTotal + ": " + libName;
+      if (curLib.quality != null) libText += "  ·  q" + curLib.quality;
+      libLine.textContent = libText;
+      libLine.classList.remove("hidden");
+    } else {
+      libLine.textContent = "";
+      libLine.classList.add("hidden");
+    }
+
+    // Scan detail: which file is being probed + how many are queued so far.
+    var scanLine = $("scanLine");
+    if (scanning && run.scan) {
+      var sName = run.scan.relPath || "Looking for media…";
+      scanLine.textContent = sName + "  ·  " + (run.scan.queued || 0) + " to transcode so far";
+      scanLine.classList.remove("hidden");
+    } else {
+      scanLine.textContent = "";
+      scanLine.classList.add("hidden");
+    }
+
+    // Live transcode cards (one per concurrent worker).
+    renderActiveFiles(run);
+
+    // Counters
+    var c = run.counters || {};
+    $("cEncoded").textContent = c.encoded != null ? c.encoded : 0;
+    $("cKept").textContent = c.skippedLarger != null ? c.skippedLarger : 0;
+    $("cFailed").textContent = c.failed != null ? c.failed : 0;
+    var skipped = c.skippedWorklog != null ? c.skippedWorklog : 0;
+    $("cSkipped").textContent = skipped;
+    $("chipSkipped").classList.toggle("hidden", skipped <= 0);
+  }
+
+  /* ============ Lifetime stats ============ */
+
+  function renderStats(s) {
+    $("sFiles").textContent = (s.totalFilesReplaced != null ? s.totalFilesReplaced : 0).toLocaleString();
+    $("sSaved").textContent = formatBytes(s.totalBytesSaved);
+    $("sKept").textContent = (s.totalKeptLarger != null ? s.totalKeptLarger : 0).toLocaleString();
+    $("sFailed").textContent = (s.totalFailed != null ? s.totalFailed : 0).toLocaleString();
+
+    var lr = $("lastRun");
+    if (s.lastRunAt) {
+      lr.textContent = "Last run " + formatWhen(s.lastRunAt);
+      lr.title = formatDateTime(s.lastRunAt);
+    } else {
+      lr.textContent = "No runs yet";
+      lr.title = "";
+    }
+  }
+
+  /* ============ History table ============ */
+
+  var historyBody = $("historyBody");
+
+  function statusBadge(status) {
+    var span = document.createElement("span");
+    span.className = "badge";
+    if (status === "replaced") { span.classList.add("replaced"); span.textContent = "replaced"; }
+    else if (status === "not_smaller") { span.classList.add("kept"); span.textContent = "kept"; }
+    else if (status === "failed") { span.classList.add("failed"); span.textContent = "failed"; }
+    else { span.classList.add("other"); span.textContent = "skipped"; }
+    return span;
+  }
+
+  function renderHistory(data) {
+    var files = (data && data.files) || [];
+    historyBody.textContent = "";
+
+    if (files.length === 0) {
+      var tr = document.createElement("tr");
+      var td = document.createElement("td");
+      td.colSpan = 6;
+      td.className = "empty";
+      td.textContent = "No transcoded files yet.";
+      tr.appendChild(td);
+      historyBody.appendChild(tr);
+      return;
+    }
+
+    files.forEach(function (f) {
+      var tr = document.createElement("tr");
+
+      // File
+      var tdFile = document.createElement("td");
+      tdFile.className = "file";
+      tdFile.setAttribute("data-label", "File");
+      var fullPath = f.path || f.relPath || "";
+      tdFile.title = fullPath;
+      var fname = document.createElement("span");
+      fname.className = "fname";
+      fname.textContent = f.relPath || basename(fullPath) || "—";
+      tdFile.appendChild(fname);
+      tr.appendChild(tdFile);
+
+      // Before -> After
+      var tdSize = document.createElement("td");
+      tdSize.className = "size";
+      tdSize.setAttribute("data-label", "Size");
+      var before = document.createTextNode(formatBytes(f.sizeBefore));
+      var arrow = document.createElement("span");
+      arrow.className = "arrow";
+      arrow.textContent = " → ";
+      tdSize.appendChild(before);
+      tdSize.appendChild(arrow);
+      tdSize.appendChild(document.createTextNode(formatBytes(f.sizeAfter)));
+      tr.appendChild(tdSize);
+
+      // Saved
+      var tdSaved = document.createElement("td");
+      tdSaved.className = "saved";
+      tdSaved.setAttribute("data-label", "Saved");
+      var pct = f.savedPct;
+      var savedSpan = document.createElement("span");
+      if (pct === null || pct === undefined || isNaN(pct)) {
+        savedSpan.className = "saved-muted";
+        savedSpan.textContent = "—";
+      } else {
+        var rounded = Math.round(Number(pct));
+        if (f.status === "replaced" || f.replaced === 1) {
+          savedSpan.className = "saved-good";
+          // savedPct positive means space saved -> show as negative size change.
+          savedSpan.textContent = "−" + Math.abs(rounded) + "%";
+        } else {
+          savedSpan.className = "saved-muted";
+          var sign = rounded >= 0 ? "+" : "−";
+          savedSpan.textContent = sign + Math.abs(rounded) + "%";
+        }
+      }
+      tdSaved.appendChild(savedSpan);
+      tr.appendChild(tdSaved);
+
+      // Quality
+      var tdQuality = document.createElement("td");
+      tdQuality.className = "saved";
+      tdQuality.setAttribute("data-label", "Quality");
+      tdQuality.textContent = (f.quality != null) ? ("q" + f.quality) : "—";
+      tr.appendChild(tdQuality);
+
+      // Status
+      var tdStatus = document.createElement("td");
+      tdStatus.setAttribute("data-label", "Status");
+      tdStatus.appendChild(statusBadge(f.status));
+      tr.appendChild(tdStatus);
+
+      // When
+      var tdWhen = document.createElement("td");
+      tdWhen.className = "when";
+      tdWhen.setAttribute("data-label", "When");
+      tdWhen.textContent = formatWhen(f.finishedAt);
+      tdWhen.title = formatDateTime(f.finishedAt);
+      tr.appendChild(tdWhen);
+
+      historyBody.appendChild(tr);
+    });
+  }
+
+  /* ============ Past runs ============ */
+
+  var runsList = $("runsList");
+
+  function renderRuns(data) {
+    var runs = (data && data.runs) || [];
+    runsList.textContent = "";
+
+    if (runs.length === 0) {
+      var empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "No runs recorded yet.";
+      runsList.appendChild(empty);
+      return;
+    }
+
+    runs.forEach(function (r) {
+      var row = document.createElement("div");
+      row.className = "run-row";
+
+      var when = document.createElement("span");
+      when.className = "when";
+      when.textContent = formatDateTime(r.startedAt);
+      when.title = r.startedAt || "";
+      row.appendChild(when);
+
+      var trig = document.createElement("span");
+      trig.className = "trig";
+      trig.textContent = r.trigger || "manual";
+      row.appendChild(trig);
+
+      var rstatus = document.createElement("span");
+      rstatus.className = "rstatus " + (r.status || "");
+      rstatus.textContent = r.status || "";
+      row.appendChild(rstatus);
+
+      var counts = document.createElement("span");
+      counts.className = "counts";
+      var enc = r.encoded != null ? r.encoded : 0;
+      var kept = r.skippedLarger != null ? r.skippedLarger : 0;
+      var failed = r.failed != null ? r.failed : 0;
+      counts.textContent = enc + " encoded / " + kept + " kept / " + failed + " failed";
+      row.appendChild(counts);
+
+      var saved = document.createElement("span");
+      saved.className = "saved saved-good";
+      var bs = r.bytesSaved != null ? r.bytesSaved : 0;
+      saved.textContent = bs > 0 ? "−" + formatBytes(bs) : formatBytes(0);
+      if (bs <= 0) saved.className = "saved saved-muted";
+      row.appendChild(saved);
+
+      runsList.appendChild(row);
+    });
+  }
+
+  /* ============ Polling ============ */
+
+  function pollStatus() {
+    if (document.hidden) return;
+    api("/api/status")
+      .then(function (data) {
+        setOnline(true);
+        renderStatus(data);
+      })
+      .catch(function (err) {
+        if (err && err.status) {
+          // Server responded but with an error; treat as online-ish.
+          setOnline(true);
+        } else {
+          setOnline(false);
+        }
+      });
+  }
+
+  function loadSlow() {
+    // stats
+    api("/api/stats")
+      .then(function (s) { setOnline(true); renderStats(s); })
+      .catch(function (err) { if (!err.status) setOnline(false); });
+    // history
+    api("/api/history?limit=50&offset=0")
+      .then(function (h) { renderHistory(h); })
+      .catch(function () {});
+    // runs
+    api("/api/runs?limit=20")
+      .then(function (r) { renderRuns(r); })
+      .catch(function () {});
+  }
+
+  function startPolling() {
+    stopPolling();
+    pollStatus();
+    statusTimer = setInterval(pollStatus, 1000);
+    slowTimer = setInterval(function () {
+      if (!document.hidden) loadSlow();
+    }, 5000);
+  }
+
+  function stopPolling() {
+    if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
+    if (slowTimer) { clearInterval(slowTimer); slowTimer = null; }
+  }
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) {
+      stopPolling();
+    } else {
+      startPolling();
+      loadSlow();
+    }
+  });
+
+  /* ============ Controls ============ */
+
+  runBtn.addEventListener("click", function () {
+    runBtn.disabled = true;
+    var body = {};
+    api("/api/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    })
+      .then(function (res) {
+        toast("Run started", "ok");
+        pollStatus();
+      })
+      .catch(function (err) {
+        if (err.status === 409) {
+          toast("Already running", "err");
+        } else if (err.body && err.body.error) {
+          toast(err.body.error, "err");
+        } else {
+          toast("Could not start run", "err");
+        }
+        runBtn.disabled = false;
+      });
+  });
+
+  stopBtn.addEventListener("click", function () {
+    stopBtn.disabled = true;
+    api("/api/stop", { method: "POST" })
+      .then(function () {
+        toast("Stopping…", "ok");
+        pollStatus();
+      })
+      .catch(function (err) {
+        if (err.body && err.body.error) toast(err.body.error, "err");
+        else toast("Could not stop run", "err");
+        stopBtn.disabled = false;
+      });
+  });
+
+  /* ============ Settings modal ============ */
+
+  var settingsBack = $("settingsBack");
+  var settingsLoading = $("settingsLoading");
+  var settingsForm = $("settingsForm");
+  var libList = $("libList");
+  var defaultQualityInput = $("defaultQuality");
+  var defaultQualityVal = $("defaultQualityVal");
+  var concurrencyInput = $("concurrency");
+  var concurrencyVal = $("concurrencyVal");
+  var schedEnabled = $("schedEnabled");
+  var schedDetail = $("schedDetail");
+  var schedTime = $("schedTime");
+  var dayToggles = $("dayToggles");
+
+  var DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  var dayButtons = [];
+
+  // Build day toggle buttons once.
+  (function buildDays() {
+    for (var i = 0; i < 7; i++) {
+      (function (day) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "day";
+        b.textContent = DAY_LABELS[day];
+        b.setAttribute("data-day", String(day));
+        b.addEventListener("click", function () {
+          b.classList.toggle("on");
+        });
+        dayToggles.appendChild(b);
+        dayButtons.push(b);
+      })(i);
+    }
+  })();
+
+  function defaultQualityValue() {
+    var q = Number(defaultQualityInput.value);
+    if (isNaN(q) || q < 1) q = 70;
+    return q;
+  }
+
+  // lib: { path, quality, enabled } | undefined (blank new row).
+  function addLibraryRow(lib) {
+    lib = lib || {};
+    var row = document.createElement("div");
+    row.className = "lib-row";
+
+    // Path line: text input + remove button.
+    var pathLine = document.createElement("div");
+    pathLine.className = "lib-path-line";
+
+    var input = document.createElement("input");
+    input.type = "text";
+    input.className = "txt lib-path";
+    input.placeholder = "/Volumes/NAS/Movies";
+    input.value = lib.path || "";
+
+    var rm = document.createElement("button");
+    rm.type = "button";
+    rm.className = "path-remove";
+    rm.textContent = "✕";
+    rm.setAttribute("aria-label", "Remove library");
+    rm.addEventListener("click", function () {
+      if (row.parentNode) row.parentNode.removeChild(row);
+    });
+
+    pathLine.appendChild(input);
+    pathLine.appendChild(rm);
+    row.appendChild(pathLine);
+
+    // Controls line: quality slider + enabled checkbox.
+    var controls = document.createElement("div");
+    controls.className = "lib-controls";
+
+    var qWrap = document.createElement("div");
+    qWrap.className = "lib-quality";
+
+    var qLbl = document.createElement("span");
+    qLbl.className = "lbl";
+    qLbl.textContent = "Quality";
+    qWrap.appendChild(qLbl);
+
+    var qRange = document.createElement("input");
+    qRange.type = "range";
+    qRange.className = "lib-quality-input";
+    qRange.min = "1";
+    qRange.max = "100";
+    var qv = (lib.quality != null) ? Number(lib.quality) : defaultQualityValue();
+    qRange.value = String(qv);
+    qWrap.appendChild(qRange);
+
+    var qVal = document.createElement("span");
+    qVal.className = "range-val";
+    qVal.textContent = qRange.value;
+    qRange.addEventListener("input", function () {
+      qVal.textContent = qRange.value;
+    });
+    qWrap.appendChild(qVal);
+
+    controls.appendChild(qWrap);
+
+    var enWrap = document.createElement("label");
+    enWrap.className = "lib-enabled";
+    var enBox = document.createElement("input");
+    enBox.type = "checkbox";
+    enBox.className = "lib-enabled-input";
+    enBox.checked = (lib.enabled == null) ? true : !!lib.enabled;
+    var enText = document.createElement("span");
+    enText.textContent = "Enabled";
+    enWrap.appendChild(enBox);
+    enWrap.appendChild(enText);
+    controls.appendChild(enWrap);
+
+    row.appendChild(controls);
+    libList.appendChild(row);
+  }
+
+  defaultQualityInput.addEventListener("input", function () {
+    defaultQualityVal.textContent = defaultQualityInput.value;
+  });
+
+  concurrencyInput.addEventListener("input", function () {
+    concurrencyVal.textContent = concurrencyInput.value;
+  });
+
+  $("addLibrary").addEventListener("click", function () {
+    addLibraryRow({ quality: defaultQualityValue(), enabled: true });
+  });
+
+  function updateSchedEnabledState() {
+    if (schedEnabled.checked) schedDetail.classList.remove("sched-disabled");
+    else schedDetail.classList.add("sched-disabled");
+  }
+  schedEnabled.addEventListener("change", updateSchedEnabledState);
+
+  function populateSettings(cfg, libsData) {
+    configCache = cfg;
+
+    // Default quality (prefill source for new library rows) — set before
+    // building rows so blank rows can read it.
+    var dq = cfg.defaultQuality != null ? cfg.defaultQuality : 70;
+    defaultQualityInput.value = dq;
+    defaultQualityVal.textContent = dq;
+
+    var cc = cfg.concurrency != null ? cfg.concurrency : 3;
+    concurrencyInput.value = cc;
+    concurrencyVal.textContent = cc;
+
+    // Libraries
+    libList.textContent = "";
+    var libs = (libsData && libsData.libraries) || [];
+    if (libs.length === 0) {
+      addLibraryRow({ quality: defaultQualityValue(), enabled: true });
+    } else {
+      libs.forEach(function (lib) { addLibraryRow(lib); });
+    }
+
+    // Schedule
+    var sch = cfg.schedule || { enabled: false, time: "03:00", days: [] };
+    schedEnabled.checked = !!sch.enabled;
+    schedTime.value = sch.time || "03:00";
+    var days = sch.days || [];
+    dayButtons.forEach(function (b) {
+      var d = Number(b.getAttribute("data-day"));
+      if (days.indexOf(d) >= 0) b.classList.add("on");
+      else b.classList.remove("on");
+    });
+    updateSchedEnabledState();
+
+    settingsLoading.classList.add("hidden");
+    settingsForm.classList.remove("hidden");
+  }
+
+  function openSettings() {
+    settingsBack.classList.add("show");
+    settingsForm.classList.add("hidden");
+    settingsLoading.classList.remove("hidden");
+    settingsLoading.textContent = "Loading…";
+
+    Promise.all([api("/api/config"), api("/api/libraries")])
+      .then(function (results) { populateSettings(results[0], results[1]); })
+      .catch(function () {
+        settingsLoading.textContent = "Could not load settings.";
+      });
+  }
+
+  function closeSettings() {
+    settingsBack.classList.remove("show");
+  }
+
+  // Build the libraries array from rows (skip blank paths). Each item:
+  // { path, quality, enabled }.
+  function collectLibraries() {
+    var libs = [];
+    libList.querySelectorAll(".lib-row").forEach(function (row) {
+      var pathInput = row.querySelector("input.lib-path");
+      var qInput = row.querySelector("input.lib-quality-input");
+      var enInput = row.querySelector("input.lib-enabled-input");
+      if (!pathInput) return;
+      var v = pathInput.value.trim();
+      if (!v) return;
+      libs.push({
+        path: v,
+        quality: Number(qInput.value),
+        enabled: !!(enInput && enInput.checked)
+      });
+    });
+    return libs;
+  }
+
+  // Build the /api/config payload (defaultQuality + schedule).
+  function collectConfig() {
+    var out = {};
+    out.defaultQuality = Number(defaultQualityInput.value);
+    out.concurrency = Number(concurrencyInput.value);
+
+    var days = [];
+    dayButtons.forEach(function (b) {
+      if (b.classList.contains("on")) days.push(Number(b.getAttribute("data-day")));
+    });
+    days.sort(function (a, b) { return a - b; });
+    out.schedule = {
+      enabled: schedEnabled.checked,
+      time: schedTime.value || "03:00",
+      days: days
+    };
+
+    return out;
+  }
+
+  var saveBtn = $("saveSettings");
+  saveBtn.addEventListener("click", function () {
+    var libraries = collectLibraries();
+    var configPayload = collectConfig();
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Saving…";
+
+    function finish() {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Save";
+    }
+
+    // 1) Replace-all save of libraries. On 400, surface error and keep panel open.
+    api("/api/libraries", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ libraries: libraries })
+    })
+      .then(function () {
+        // 2) Config (defaultQuality + schedule).
+        return api("/api/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(configPayload)
+        });
+      })
+      .then(function (cfg) {
+        if (cfg) configCache = cfg;
+        toast("Settings saved", "ok");
+        closeSettings();
+        // Refresh status (header pill / schedule) and slow data (stats/history).
+        pollStatus();
+        loadSlow();
+        finish();
+      })
+      .catch(function (err) {
+        var msg = (err.body && err.body.error) ? err.body.error : "Could not save settings";
+        if (err.body && err.body.invalid && err.body.invalid.length) {
+          msg += ": " + err.body.invalid.join(", ");
+        }
+        toast(msg, "err");
+        finish();
+      });
+  });
+
+  $("gearBtn").addEventListener("click", openSettings);
+  $("closeSettings").addEventListener("click", closeSettings);
+  $("cancelSettings").addEventListener("click", closeSettings);
+  settingsBack.addEventListener("click", function (e) {
+    if (e.target === settingsBack) closeSettings();
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && settingsBack.classList.contains("show")) closeSettings();
+  });
+
+  /* ============ Boot ============ */
+
+  startPolling();
+  loadSlow();
+})();
+</script>
+</body>
+</html>

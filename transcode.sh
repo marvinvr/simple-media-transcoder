@@ -1,13 +1,6 @@
 #!/bin/zsh
 set -u
 
-if (( $# == 0 )); then
-  echo "Usage: $0 /path/to/library [/path/to/another-library ...]"
-  exit 1
-fi
-
-LIBRARY_INPUTS=("$@")
-
 # Apple VideoToolbox quality scale: higher = better quality and larger files.
 QUALITY="${QUALITY:-70}"
 
@@ -38,13 +31,6 @@ if (( BAR_WIDTH < 1 )); then
   exit 1
 fi
 
-for LIBRARY_INPUT in "${LIBRARY_INPUTS[@]}"; do
-  if [[ ! -d "$LIBRARY_INPUT" ]]; then
-    echo "ERROR: Library folder does not exist: $LIBRARY_INPUT"
-    exit 1
-  fi
-done
-
 if ! command -v ffmpeg >/dev/null 2>&1 || \
    ! command -v ffprobe >/dev/null 2>&1; then
   echo "ERROR: ffmpeg and ffprobe are required. Install them with:"
@@ -62,6 +48,89 @@ fi
 INTERACTIVE=0
 [[ -t 1 ]] && INTERACTIVE=1
 PROGRESS_ACTIVE=0
+
+# Machine-readable event output for the SMT background service. When SMT_MACHINE=1
+# (set by the daemon) the script emits one structured "@@SMT" line per event on
+# stdout, in addition to the normal human output, so the daemon can drive a live
+# web UI and persist results. Interactive and cron behavior are unchanged when
+# SMT_MACHINE is unset.
+SMT_MACHINE="${SMT_MACHINE:-0}"
+case "$SMT_MACHINE" in
+  ''|*[!0-9]*) SMT_MACHINE=0 ;;
+esac
+
+# Operating mode for the SMT daemon. Empty = legacy standalone behavior (scan
+# every library argument, then transcode serially in one process). The daemon
+# drives two narrower modes so it can run several encodes at once:
+#   scan  — scan ONE library and emit a "queue_item" event for every file that
+#           needs transcoding (after pre-filtering the worklog), then exit.
+#   file  — transcode exactly ONE already-scanned file, described via SMT_FILE,
+#           SMT_LIBRARY, SMT_CODEC, SMT_RES and SMT_DURATION, then exit.
+SMT_MODE="${SMT_MODE:-}"
+
+# Worklog skip set, loaded from SMT_SKIP_FILE (written by the daemon): maps an
+# absolute path to the file size that was kept (HEVC output was not smaller) at
+# the current quality on a previous run. Such files are skipped during scanning
+# so we never waste time re-encoding a file we already decided to keep.
+typeset -gA SMT_SKIP_SIZES
+SMT_SKIP_LOADED=0
+
+# Which decode path produced the last successful encode (hardware|software|-).
+LAST_DECODE_MODE="-"
+
+# The temp output and error log of the file currently being encoded. A TERM/INT
+# from the daemon uses these to clean up a half-written sidecar before exiting.
+CURRENT_TEMP=""
+CURRENT_ERROR_LOG=""
+
+# Encode an arbitrary string for safe single-line transport (paths may contain
+# spaces, tabs, quotes, or non-UTF8 bytes). The daemon base64-decodes it.
+smt_b64() {
+  printf '%s' "$1" | base64 | tr -d '\n'
+}
+
+# Emit one tab-delimited event line: "@@SMT<TAB>type<TAB>k=v<TAB>k=v...".
+emit() {
+  (( SMT_MACHINE )) || return 0
+  local LINE="@@SMT"$'\t'"$1"
+  shift
+  local FIELD
+  for FIELD in "$@"; do
+    LINE+=$'\t'"$FIELD"
+  done
+  printf '%s\n' "$LINE"
+}
+
+# Load the worklog skip set from SMT_SKIP_FILE. Each line is
+# "<size><TAB><base64 absolute path>"; base64 keeps arbitrary bytes in paths
+# intact. Safe to call repeatedly — it reads the file at most once.
+load_skip_set() {
+  (( SMT_SKIP_LOADED )) && return 0
+  SMT_SKIP_LOADED=1
+  local SKIP_FILE="${SMT_SKIP_FILE:-}"
+  [[ -n "$SKIP_FILE" && -r "$SKIP_FILE" ]] || return 0
+  local SIZE B64 DECODED_PATH
+  while IFS=$'\t' read -r SIZE B64; do
+    [[ -z "$B64" ]] && continue
+    DECODED_PATH="$(printf '%s' "$B64" | base64 -d 2>/dev/null)" || continue
+    [[ -z "$DECODED_PATH" ]] && continue
+    SMT_SKIP_SIZES[$DECODED_PATH]="$SIZE"
+  done < "$SKIP_FILE"
+}
+
+smt_cleanup_on_signal() {
+  # Kill the in-flight ffmpeg (and the progress-reading subshell) so the run
+  # aborts immediately instead of falling through to the next queued file, then
+  # remove the half-written sidecar before exiting.
+  pkill -P $$ 2>/dev/null
+  [[ -n "$CURRENT_TEMP" ]] && rm -f "$CURRENT_TEMP"
+  [[ -n "$CURRENT_ERROR_LOG" ]] && rm -f "$CURRENT_ERROR_LOG"
+  exit 143
+}
+
+if (( SMT_MACHINE )); then
+  trap 'smt_cleanup_on_signal' TERM INT
+fi
 
 print_banner() {
   if (( INTERACTIVE )); then
@@ -331,12 +400,101 @@ encode_file() {
         progress)
           show_encode_progress "$COMPLETED" "$TOTAL" "$STATUS" \
             "$DURATION_SECONDS" "$OUT_TIME_US" "$FPS" "$SPEED"
+          if (( SMT_MACHINE )); then
+            local PROG_OUT=0
+            local PROG_PCT=0
+            case "$OUT_TIME_US" in
+              ''|*[!0-9]*) PROG_OUT=0 ;;
+              *) PROG_OUT=$(( OUT_TIME_US / 1000000 )) ;;
+            esac
+            if (( DURATION_SECONDS > 0 )); then
+              (( PROG_OUT > DURATION_SECONDS )) && PROG_OUT=$DURATION_SECONDS
+              PROG_PCT=$(( PROG_OUT * 100 / DURATION_SECONDS ))
+            fi
+            emit file_prog "pct=$PROG_PCT" "out=$PROG_OUT" \
+              "dur=$DURATION_SECONDS" "fps=$FPS" "speed=$SPEED"
+          fi
           ;;
       esac
     done
 
   PIPE_STATUS=("${pipestatus[@]}")
   return "${PIPE_STATUS[1]}"
+}
+
+# Map a lowercase file extension to its ffmpeg muxer and any container-specific
+# encoder arguments. Sets MUXER and EXTRA_ARGS in the caller's scope and returns
+# non-zero for unsupported containers. Shared by the library run and the tryout.
+select_muxer() {
+  local EXT="$1"
+
+  case "$EXT" in
+    mkv)
+      MUXER="matroska"
+      EXTRA_ARGS=()
+      ;;
+    mp4|m4v)
+      MUXER="mp4"
+      EXTRA_ARGS=(-tag:V:0 hvc1)
+      ;;
+    mov)
+      MUXER="mov"
+      EXTRA_ARGS=(-tag:V:0 hvc1)
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# Encode INPUT to OUTPUT, trying hardware decoding first and falling back to
+# software decoding (HEVC encoding stays on the hardware encoder either way).
+# ffmpeg stderr is captured in ERROR_LOG. Returns the encoder's exit status.
+# Shared by the library run and the single-file tryout.
+encode_with_fallback() {
+  local INPUT="$1"
+  local OUTPUT="$2"
+  local MUXER="$3"
+  local COMPLETED="$4"
+  local TOTAL="$5"
+  local STATUS="$6"
+  local DURATION_SECONDS="$7"
+  local ERROR_LOG="$8"
+  local RETRY_STATUS="$9"
+  shift 9
+
+  local -a EXTRA_ARGS
+  EXTRA_ARGS=("$@")
+
+  # Attempt hardware decoding and hardware encoding first.
+  if encode_file hardware \
+    "$INPUT" "$OUTPUT" "$MUXER" \
+    "$COMPLETED" "$TOTAL" "$STATUS" \
+    "$DURATION_SECONDS" \
+    "${EXTRA_ARGS[@]}" \
+    2>"$ERROR_LOG"
+  then
+    LAST_DECODE_MODE="hardware"
+    return 0
+  fi
+
+  rm -f "$OUTPUT"
+
+  show_progress "$COMPLETED" "$TOTAL" "$RETRY_STATUS"
+
+  # Fall back to software decoding, but continue using hardware HEVC encoding.
+  if encode_file software \
+    "$INPUT" "$OUTPUT" "$MUXER" \
+    "$COMPLETED" "$TOTAL" "$RETRY_STATUS" \
+    "$DURATION_SECONDS" \
+    "${EXTRA_ARGS[@]}" \
+    2>>"$ERROR_LOG"
+  then
+    LAST_DECODE_MODE="software"
+    return 0
+  fi
+
+  return 1
 }
 
 print_section() {
@@ -369,6 +527,9 @@ scan_library() {
   LIBRARY="$(cd "$LIBRARY_INPUT" && pwd -P)"
   print_section "Scanning: $LIBRARY"
 
+  emit scan_start "lib_b64=$(smt_b64 "$LIBRARY")"
+  load_skip_set
+
   FILES=()
   while IFS= read -r -d '' FILE; do
     FILES+=("$FILE")
@@ -386,6 +547,9 @@ scan_library() {
   QUEUED_BEFORE=${#TRANSCODE_FILES[@]}
 
   if (( SCAN_TOTAL == 0 )); then
+    emit scan_done "queued=${#TRANSCODE_FILES[@]}" "total=$SCAN_TOTAL" \
+      "skipped_hevc=$SKIPPED_HEVC" "skipped_other=$SKIPPED_OTHER" \
+      "skipped_worklog=$SKIPPED_WORKLOG"
     echo "No supported media files found."
     return
   fi
@@ -398,6 +562,23 @@ scan_library() {
 
     show_progress $(( SCAN_CURRENT - 1 )) "$SCAN_TOTAL" \
       "Scanning: $RELATIVE_PATH"
+
+    emit scan_prog "index=$SCAN_CURRENT" "total=$SCAN_TOTAL" \
+      "queued=${#TRANSCODE_FILES[@]}" "rel_b64=$(smt_b64 "$RELATIVE_PATH")"
+
+    # Worklog skip: if this exact file (path + size) was already encoded at this
+    # quality on a previous run and the HEVC output was not smaller, we decided
+    # to keep the original. Skip it now without re-probing or re-encoding.
+    if [[ -n "${SMT_SKIP_SIZES[$FILE]:-}" ]]; then
+      local CURRENT_SIZE
+      CURRENT_SIZE="$(stat -f '%z' "$FILE" 2>/dev/null || printf '0')"
+      if [[ "${SMT_SKIP_SIZES[$FILE]}" == "$CURRENT_SIZE" ]]; then
+        SKIPPED_WORKLOG=$(( SKIPPED_WORKLOG + 1 ))
+        finish_item "$SCAN_CURRENT" "$SCAN_TOTAL" \
+          "SCAN SKIP: Kept on a previous run (q$QUALITY): $RELATIVE_PATH"
+        continue
+      fi
+    fi
 
     CODEC="$(video_codec "$FILE")"
     RESOLUTION="$(video_resolution "$FILE")"
@@ -430,6 +611,8 @@ scan_library() {
         TRANSCODE_CODECS+=("$CODEC")
         TRANSCODE_RESOLUTIONS+=("$RESOLUTION")
         TRANSCODE_DURATIONS+=("$DURATION")
+        emit queue_item "codec=$CODEC" "res=$RESOLUTION" "dur=$DURATION" \
+          "rel_b64=$(smt_b64 "$RELATIVE_PATH")" "path_b64=$(smt_b64 "$FILE")"
         finish_item "$SCAN_CURRENT" "$SCAN_TOTAL" \
           "QUEUE: $RELATIVE_PATH ($CODEC -> hevc, $RESOLUTION)"
         ;;
@@ -442,6 +625,10 @@ scan_library() {
     esac
   done
 
+  emit scan_done "queued=${#TRANSCODE_FILES[@]}" "total=$SCAN_TOTAL" \
+    "skipped_hevc=$SKIPPED_HEVC" "skipped_other=$SKIPPED_OTHER" \
+    "skipped_worklog=$SKIPPED_WORKLOG"
+
   if (( INTERACTIVE )); then
     show_progress "$SCAN_CURRENT" "$SCAN_TOTAL" \
       "Scan complete: $((${#TRANSCODE_FILES[@]} - QUEUED_BEFORE)) queued from this path"
@@ -451,15 +638,21 @@ scan_library() {
   fi
 }
 
-transcode_all() {
-  local CURRENT=0
-  local TRANSCODE_TOTAL=${#TRANSCODE_FILES[@]}
-  local LIBRARY=""
-  local FILE=""
+# Transcode a single, already-scanned file in place. All metadata is passed in
+# (no probing here) and the function emits file_start/file_prog/file_done and
+# updates the counters. It always returns 0: a per-file failure must never abort
+# the caller (the legacy loop or a single daemon worker). Used by both
+# transcode_all (legacy serial run) and file mode (one daemon worker).
+transcode_one_file() {
+  local FILE="$1"
+  local LIBRARY="$2"
+  local CODEC="$3"
+  local RESOLUTION="$4"
+  local DURATION="$5"
+  local CURRENT="$6"
+  local TRANSCODE_TOTAL="$7"
+
   local RELATIVE_PATH=""
-  local CODEC=""
-  local RESOLUTION=""
-  local DURATION=0
   local EXT=""
   local MUXER=""
   local TEMP=""
@@ -468,11 +661,162 @@ transcode_all() {
   local OUTPUT_RESOLUTION=""
   local ORIGINAL_SIZE=0
   local OUTPUT_SIZE=0
+  local ENC_START=0
   local -a EXTRA_ARGS
+
+  RELATIVE_PATH="$(relative_path "$FILE")"
+
+  EXT="$(printf '%s' "${FILE##*.}" | tr '[:upper:]' '[:lower:]')"
+
+  if ! select_muxer "$EXT"; then
+    SKIPPED_OTHER=$(( SKIPPED_OTHER + 1 ))
+    finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
+      "SKIP: Unsupported container: $RELATIVE_PATH"
+    emit file_done "status=skipped_other" "size_before=0" "size_after=0" \
+      "decode=-" "enc=0" "rel_b64=$(smt_b64 "$RELATIVE_PATH")" \
+      "path_b64=$(smt_b64 "$FILE")"
+    return 0
+  fi
+
+  # Write beside the source so the final rename remains on the same filesystem.
+  TEMP="${FILE}.hevc-partial"
+  ERROR_LOG="${FILE}.hevc-error.log"
+
+  rm -f "$TEMP" "$ERROR_LOG"
+
+  ORIGINAL_SIZE="$(stat -f '%z' "$FILE" 2>/dev/null || printf '0')"
+  LAST_DECODE_MODE="-"
+  ENC_START=$SECONDS
+  CURRENT_TEMP="$TEMP"
+  CURRENT_ERROR_LOG="$ERROR_LOG"
+
+  emit file_start "index=$CURRENT" "total=$TRANSCODE_TOTAL" \
+    "size_before=$ORIGINAL_SIZE" "codec=$CODEC" "res=$RESOLUTION" \
+    "dur=$DURATION" "rel_b64=$(smt_b64 "$RELATIVE_PATH")" \
+    "path_b64=$(smt_b64 "$FILE")"
+
+  show_progress $(( CURRENT - 1 )) "$TRANSCODE_TOTAL" \
+    "Encoding: $RELATIVE_PATH ($CODEC -> hevc, $RESOLUTION)"
+
+  if ! encode_with_fallback \
+    "$FILE" "$TEMP" "$MUXER" \
+    $(( CURRENT - 1 )) "$TRANSCODE_TOTAL" \
+    "Encoding: $RELATIVE_PATH ($CODEC -> hevc, $RESOLUTION)" \
+    "$DURATION" "$ERROR_LOG" \
+    "Retrying with software decode: $RELATIVE_PATH" \
+    "${EXTRA_ARGS[@]}"
+  then
+    FAILED=$(( FAILED + 1 ))
+    finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
+      "FAILED: Encode error: $RELATIVE_PATH"
+    print_detail "        Error log: $ERROR_LOG"
+    emit file_done "status=failed" "size_before=$ORIGINAL_SIZE" \
+      "size_after=0" "decode=$LAST_DECODE_MODE" \
+      "enc=$(( SECONDS - ENC_START ))" \
+      "rel_b64=$(smt_b64 "$RELATIVE_PATH")" \
+      "path_b64=$(smt_b64 "$FILE")" \
+      "err_b64=$(smt_b64 "$(tail -c 800 "$ERROR_LOG" 2>/dev/null)")"
+    CURRENT_TEMP=""
+    CURRENT_ERROR_LOG=""
+    rm -f "$TEMP"
+    return 0
+  fi
+
+  OUTPUT_CODEC="$(video_codec "$TEMP")"
+  OUTPUT_RESOLUTION="$(video_resolution "$TEMP")"
+
+  if [[ "$OUTPUT_CODEC" != "hevc" ]]; then
+    FAILED=$(( FAILED + 1 ))
+    finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
+      "FAILED: Output is not HEVC: $RELATIVE_PATH"
+    emit file_done "status=failed" "size_before=$ORIGINAL_SIZE" \
+      "size_after=0" "decode=$LAST_DECODE_MODE" \
+      "enc=$(( SECONDS - ENC_START ))" \
+      "rel_b64=$(smt_b64 "$RELATIVE_PATH")" \
+      "path_b64=$(smt_b64 "$FILE")" \
+      "err_b64=$(smt_b64 "Output codec was ${OUTPUT_CODEC:-unknown}, not hevc")"
+    CURRENT_TEMP=""
+    CURRENT_ERROR_LOG=""
+    rm -f "$TEMP"
+    return 0
+  fi
+
+  if [[ "$OUTPUT_RESOLUTION" != "$RESOLUTION" ]]; then
+    FAILED=$(( FAILED + 1 ))
+    finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
+      "FAILED: Resolution changed $RESOLUTION -> $OUTPUT_RESOLUTION: $RELATIVE_PATH"
+    emit file_done "status=failed" "size_before=$ORIGINAL_SIZE" \
+      "size_after=0" "decode=$LAST_DECODE_MODE" \
+      "enc=$(( SECONDS - ENC_START ))" \
+      "rel_b64=$(smt_b64 "$RELATIVE_PATH")" \
+      "path_b64=$(smt_b64 "$FILE")" \
+      "err_b64=$(smt_b64 "Resolution changed $RESOLUTION -> $OUTPUT_RESOLUTION")"
+    CURRENT_TEMP=""
+    CURRENT_ERROR_LOG=""
+    rm -f "$TEMP"
+    return 0
+  fi
+
+  OUTPUT_SIZE="$(stat -f '%z' "$TEMP")"
+
+  if (( OUTPUT_SIZE >= ORIGINAL_SIZE )); then
+    SKIPPED_LARGER=$(( SKIPPED_LARGER + 1 ))
+    finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
+      "SKIP: HEVC output is not smaller: $RELATIVE_PATH"
+    emit file_done "status=not_smaller" "size_before=$ORIGINAL_SIZE" \
+      "size_after=$OUTPUT_SIZE" "decode=$LAST_DECODE_MODE" \
+      "enc=$(( SECONDS - ENC_START ))" \
+      "rel_b64=$(smt_b64 "$RELATIVE_PATH")" \
+      "path_b64=$(smt_b64 "$FILE")"
+    CURRENT_TEMP=""
+    CURRENT_ERROR_LOG=""
+    rm -f "$TEMP" "$ERROR_LOG"
+    return 0
+  fi
+
+  # Preserve permissions and modification timestamp where possible.
+  chmod "$(stat -f '%Lp' "$FILE")" "$TEMP" 2>/dev/null || true
+  touch -r "$FILE" "$TEMP" 2>/dev/null || true
+
+  if mv -f "$TEMP" "$FILE"; then
+    ENCODED=$(( ENCODED + 1 ))
+    rm -f "$ERROR_LOG"
+    finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
+      "DONE: Replaced original: $RELATIVE_PATH"
+    emit file_done "status=replaced" "size_before=$ORIGINAL_SIZE" \
+      "size_after=$OUTPUT_SIZE" "decode=$LAST_DECODE_MODE" \
+      "enc=$(( SECONDS - ENC_START ))" \
+      "rel_b64=$(smt_b64 "$RELATIVE_PATH")" \
+      "path_b64=$(smt_b64 "$FILE")"
+  else
+    FAILED=$(( FAILED + 1 ))
+    finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
+      "FAILED: Could not replace original: $RELATIVE_PATH"
+    emit file_done "status=failed" "size_before=$ORIGINAL_SIZE" \
+      "size_after=$OUTPUT_SIZE" "decode=$LAST_DECODE_MODE" \
+      "enc=$(( SECONDS - ENC_START ))" \
+      "rel_b64=$(smt_b64 "$RELATIVE_PATH")" \
+      "path_b64=$(smt_b64 "$FILE")" \
+      "err_b64=$(smt_b64 "Could not replace original file")"
+    rm -f "$TEMP"
+  fi
+  CURRENT_TEMP=""
+  CURRENT_ERROR_LOG=""
+  return 0
+}
+
+transcode_all() {
+  local CURRENT=0
+  local TRANSCODE_TOTAL=${#TRANSCODE_FILES[@]}
 
   print_section "Transcoding"
 
+  emit queue_total "total=$TRANSCODE_TOTAL"
+
   if (( TRANSCODE_TOTAL == 0 )); then
+    emit run_end "total=$TOTAL_FILES" "queued=0" "encoded=$ENCODED" \
+      "skipped_hevc=$SKIPPED_HEVC" "skipped_larger=$SKIPPED_LARGER" \
+      "skipped_other=$SKIPPED_OTHER" "failed=$FAILED"
     echo "Finished processing $TOTAL_FILES files."
     echo "  Queued for transcoding:   0"
     echo "  Encoded and replaced:     $ENCODED"
@@ -486,122 +830,13 @@ transcode_all() {
   show_progress 0 "$TRANSCODE_TOTAL" "Transcoding"
 
   for (( CURRENT = 1; CURRENT <= TRANSCODE_TOTAL; CURRENT++ )); do
-    FILE="${TRANSCODE_FILES[$CURRENT]}"
-    LIBRARY="${TRANSCODE_LIBRARIES[$CURRENT]}"
-    CODEC="${TRANSCODE_CODECS[$CURRENT]}"
-    RESOLUTION="${TRANSCODE_RESOLUTIONS[$CURRENT]}"
-    DURATION="${TRANSCODE_DURATIONS[$CURRENT]}"
-    RELATIVE_PATH="$(relative_path "$FILE")"
-
-    EXT="$(printf '%s' "${FILE##*.}" | tr '[:upper:]' '[:lower:]')"
-    EXTRA_ARGS=()
-
-    case "$EXT" in
-      mkv)
-        MUXER="matroska"
-        ;;
-      mp4|m4v)
-        MUXER="mp4"
-        EXTRA_ARGS=(-tag:V:0 hvc1)
-        ;;
-      mov)
-        MUXER="mov"
-        EXTRA_ARGS=(-tag:V:0 hvc1)
-        ;;
-      *)
-        SKIPPED_OTHER=$(( SKIPPED_OTHER + 1 ))
-        finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
-          "SKIP: Unsupported container: $RELATIVE_PATH"
-        continue
-        ;;
-    esac
-
-    # Write beside the source so the final rename remains on the same filesystem.
-    TEMP="${FILE}.hevc-partial"
-    ERROR_LOG="${FILE}.hevc-error.log"
-
-    rm -f "$TEMP" "$ERROR_LOG"
-
-    show_progress $(( CURRENT - 1 )) "$TRANSCODE_TOTAL" \
-      "Encoding: $RELATIVE_PATH ($CODEC -> hevc, $RESOLUTION)"
-
-    # Attempt hardware decoding and hardware encoding first.
-    if ! encode_file hardware \
-      "$FILE" "$TEMP" "$MUXER" \
-      $(( CURRENT - 1 )) "$TRANSCODE_TOTAL" \
-      "Encoding: $RELATIVE_PATH ($CODEC -> hevc, $RESOLUTION)" \
-      "$DURATION" \
-      "${EXTRA_ARGS[@]}" \
-      2>"$ERROR_LOG"
-    then
-      rm -f "$TEMP"
-
-      show_progress $(( CURRENT - 1 )) "$TRANSCODE_TOTAL" \
-        "Retrying with software decode: $RELATIVE_PATH"
-
-      # Fall back to software decoding, but continue using hardware HEVC encoding.
-      if ! encode_file software \
-        "$FILE" "$TEMP" "$MUXER" \
-        $(( CURRENT - 1 )) "$TRANSCODE_TOTAL" \
-        "Retrying with software decode: $RELATIVE_PATH" \
-        "$DURATION" \
-        "${EXTRA_ARGS[@]}" \
-        2>>"$ERROR_LOG"
-      then
-        FAILED=$(( FAILED + 1 ))
-        finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
-          "FAILED: Encode error: $RELATIVE_PATH"
-        print_detail "        Error log: $ERROR_LOG"
-        rm -f "$TEMP"
-        continue
-      fi
-    fi
-
-    OUTPUT_CODEC="$(video_codec "$TEMP")"
-    OUTPUT_RESOLUTION="$(video_resolution "$TEMP")"
-
-    if [[ "$OUTPUT_CODEC" != "hevc" ]]; then
-      FAILED=$(( FAILED + 1 ))
-      finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
-        "FAILED: Output is not HEVC: $RELATIVE_PATH"
-      rm -f "$TEMP"
-      continue
-    fi
-
-    if [[ "$OUTPUT_RESOLUTION" != "$RESOLUTION" ]]; then
-      FAILED=$(( FAILED + 1 ))
-      finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
-        "FAILED: Resolution changed $RESOLUTION -> $OUTPUT_RESOLUTION: $RELATIVE_PATH"
-      rm -f "$TEMP"
-      continue
-    fi
-
-    ORIGINAL_SIZE="$(stat -f '%z' "$FILE")"
-    OUTPUT_SIZE="$(stat -f '%z' "$TEMP")"
-
-    if (( OUTPUT_SIZE >= ORIGINAL_SIZE )); then
-      SKIPPED_LARGER=$(( SKIPPED_LARGER + 1 ))
-      finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
-        "SKIP: HEVC output is not smaller: $RELATIVE_PATH"
-      rm -f "$TEMP" "$ERROR_LOG"
-      continue
-    fi
-
-    # Preserve permissions and modification timestamp where possible.
-    chmod "$(stat -f '%Lp' "$FILE")" "$TEMP" 2>/dev/null || true
-    touch -r "$FILE" "$TEMP" 2>/dev/null || true
-
-    if mv -f "$TEMP" "$FILE"; then
-      ENCODED=$(( ENCODED + 1 ))
-      rm -f "$ERROR_LOG"
-      finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
-        "DONE: Replaced original: $RELATIVE_PATH"
-    else
-      FAILED=$(( FAILED + 1 ))
-      finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
-        "FAILED: Could not replace original: $RELATIVE_PATH"
-      rm -f "$TEMP"
-    fi
+    transcode_one_file \
+      "${TRANSCODE_FILES[$CURRENT]}" \
+      "${TRANSCODE_LIBRARIES[$CURRENT]}" \
+      "${TRANSCODE_CODECS[$CURRENT]}" \
+      "${TRANSCODE_RESOLUTIONS[$CURRENT]}" \
+      "${TRANSCODE_DURATIONS[$CURRENT]}" \
+      "$CURRENT" "$TRANSCODE_TOTAL"
   done
 
   if (( INTERACTIVE )); then
@@ -610,6 +845,11 @@ transcode_all() {
   else
     echo
   fi
+
+  emit run_end "total=$TOTAL_FILES" "queued=$TRANSCODE_TOTAL" \
+    "encoded=$ENCODED" "skipped_hevc=$SKIPPED_HEVC" \
+    "skipped_larger=$SKIPPED_LARGER" "skipped_other=$SKIPPED_OTHER" \
+    "failed=$FAILED"
 
   echo "Finished processing $TOTAL_FILES files."
   echo "  Queued for transcoding:   $TRANSCODE_TOTAL"
@@ -620,23 +860,110 @@ transcode_all() {
   echo "  Failed:                   $FAILED"
 }
 
-TOTAL_FILES=0
-ENCODED=0
-SKIPPED_HEVC=0
-SKIPPED_LARGER=0
-SKIPPED_OTHER=0
-FAILED=0
-TRANSCODE_FILES=()
-TRANSCODE_LIBRARIES=()
-TRANSCODE_CODECS=()
-TRANSCODE_RESOLUTIONS=()
-TRANSCODE_DURATIONS=()
+# Reset the run/scan counters and the queue accumulator arrays.
+smt_init_counters() {
+  TOTAL_FILES=0
+  ENCODED=0
+  SKIPPED_HEVC=0
+  SKIPPED_LARGER=0
+  SKIPPED_OTHER=0
+  SKIPPED_WORKLOG=0
+  FAILED=0
+  TRANSCODE_FILES=()
+  TRANSCODE_LIBRARIES=()
+  TRANSCODE_CODECS=()
+  TRANSCODE_RESOLUTIONS=()
+  TRANSCODE_DURATIONS=()
+}
 
-print_banner
-(( INTERACTIVE )) && printf '\033[s'
+# Legacy / standalone entry point: scan every library argument, then transcode
+# the whole queue serially. Used for interactive and cron runs (no SMT_MODE).
+run_library() {
+  if (( $# == 0 )); then
+    echo "Usage: $0 /path/to/library [/path/to/another-library ...]"
+    exit 1
+  fi
 
-for LIBRARY_INPUT in "${LIBRARY_INPUTS[@]}"; do
+  local -a LIBRARY_INPUTS
+  LIBRARY_INPUTS=("$@")
+
+  local LIBRARY_INPUT=""
+  for LIBRARY_INPUT in "${LIBRARY_INPUTS[@]}"; do
+    if [[ ! -d "$LIBRARY_INPUT" ]]; then
+      echo "ERROR: Library folder does not exist: $LIBRARY_INPUT"
+      exit 1
+    fi
+  done
+
+  smt_init_counters
+
+  print_banner
+  (( INTERACTIVE )) && printf '\033[s'
+
+  for LIBRARY_INPUT in "${LIBRARY_INPUTS[@]}"; do
+    scan_library "$LIBRARY_INPUT"
+  done
+
+  transcode_all
+}
+
+# Daemon scan mode: scan ONE library and emit a queue_item event per file that
+# needs transcoding (worklog hits are pre-filtered inside scan_library). No
+# encoding happens here — the daemon drives transcoding separately.
+run_scan_mode() {
+  local LIBRARY_INPUT="$1"
+  if [[ -z "$LIBRARY_INPUT" || ! -d "$LIBRARY_INPUT" ]]; then
+    echo "ERROR: Library folder does not exist: $LIBRARY_INPUT"
+    exit 1
+  fi
+
+  smt_init_counters
   scan_library "$LIBRARY_INPUT"
-done
+}
 
-transcode_all
+# Daemon worker mode: transcode exactly ONE already-scanned file, described via
+# environment variables set by the daemon.
+run_file_mode() {
+  local FILE="${SMT_FILE:-}"
+  local LIBRARY="${SMT_LIBRARY:-}"
+
+  if [[ -z "$FILE" || ! -f "$FILE" ]]; then
+    echo "ERROR: SMT_FILE is missing or not a file: $FILE"
+    exit 1
+  fi
+
+  # Strip a trailing slash so relative paths render cleanly.
+  LIBRARY="${LIBRARY%/}"
+
+  smt_init_counters
+
+  transcode_one_file \
+    "$FILE" \
+    "$LIBRARY" \
+    "${SMT_CODEC:-}" \
+    "${SMT_RES:-}" \
+    "${SMT_DURATION:-0}" \
+    "${SMT_INDEX:-1}" \
+    "${SMT_TOTAL:-1}"
+}
+
+main() {
+  case "$SMT_MODE" in
+    scan)
+      run_scan_mode "$1"
+      ;;
+    file)
+      run_file_mode
+      ;;
+    *)
+      run_library "$@"
+      ;;
+  esac
+}
+
+# Only launch a run when executed directly. tryout.sh sets SMT_SOURCE_ONLY
+# before sourcing this file so it can reuse the functions (media probing and the
+# ffmpeg encode command) without starting a run.
+if [[ -z "${SMT_SOURCE_ONLY:-}" ]]; then
+  main "$@"
+fi

@@ -1,0 +1,10 @@
+{
+  "name": "simple-media-transcoder-service",
+  "private": true,
+  "description": "Background service + web UI for simple-media-transcoder (Bun, zero deps)",
+  "scripts": {
+    "start": "bun run server/server.ts",
+    "install-service": "bash install/install.sh",
+    "uninstall-service": "bash install/uninstall.sh"
+  }
+}

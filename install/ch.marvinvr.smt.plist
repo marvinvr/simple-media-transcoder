@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Reference copy of the LaunchAgent plist for simple-media-transcoder (SMT).
+
+  This file is documentation only. The real plist is generated dynamically by
+  install/install.sh (with paths resolved for the current machine/user) and
+  written to ~/Library/LaunchAgents/ch.marvinvr.smt.plist.
+
+  The paths below are the concrete values for this specific machine.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ch.marvinvr.smt</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/mac/.bun/bin/bun</string>
+        <string>run</string>
+        <string>/Users/mac/Development/Private/simple-media-transcoder/server/server.ts</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- /opt/homebrew/bin is required so the child transcode.sh finds ffmpeg/ffprobe. -->
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mac/Development/Private/simple-media-transcoder</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/mac/Library/Application Support/simple-media-transcoder/run.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/mac/Library/Application Support/simple-media-transcoder/run.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

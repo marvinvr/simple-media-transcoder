@@ -1,0 +1,23 @@
+# Per-project mmux config. Layered on top of ~/.mmux/config.yaml, which already
+# provides the Claude + Codex agents and the lazygit right panel — so this file
+# only adds the project's processes. Run `mmux` to open, `mmux check` to verify.
+
+processes:
+  # The web UI + JSON API (Bun). Orchestrates transcode.sh; serves on :8787.
+  # --watch restarts it when server.ts changes. autostart is off so it never
+  # collides with an already-installed launchd service on the same port.
+  - name: Server
+    cmd: bun
+    args: ["--watch", "server/server.ts"]
+    cwd: .
+    autostart: false
+
+  # Live tail of the service/transcode run log. Uses sh -c for ~ expansion;
+  # -F keeps following even before the file exists or across rotation.
+  - name: Logs
+    cmd: sh
+    args:
+      - "-c"
+      - 'tail -n 200 -F "$HOME/Library/Application Support/simple-media-transcoder/run.log"'
+    cwd: .
+    autostart: false
