@@ -178,6 +178,26 @@ video_duration() {
     awk 'NR == 1 && $1 ~ /^[0-9]+([.][0-9]+)?$/ { printf "%.0f\n", $1 }'
 }
 
+# Average frame rate of the primary video stream as a decimal (e.g. 23.976).
+# Used to derive encode progress from the frame counter when ffmpeg reports
+# out_time as "N/A" — common with the VideoToolbox hardware-decode pipeline,
+# which leaves out_time/speed/bitrate as N/A while frame/fps keep counting.
+# Prints 0 when the rate cannot be determined.
+video_frame_rate() {
+  ffprobe \
+    -v error \
+    -select_streams V:0 \
+    -show_entries stream=avg_frame_rate \
+    -of default=noprint_wrappers=1:nokey=1 \
+    "$1" 2>/dev/null |
+    awk -F'/' 'NR == 1 {
+      if ($2 + 0 > 0) { printf "%.6f\n", $1 / $2; }
+      else if ($1 ~ /^[0-9.]+$/) { printf "%.6f\n", $1; }
+      else { print "0"; }
+      exit
+    }'
+}
+
 relative_path() {
   local FILE="$1"
 
@@ -354,6 +374,7 @@ encode_file() {
   local KEY=""
   local VALUE=""
   local OUT_TIME_US=0
+  local FRAME=0
   local FPS="?"
   local SPEED="?"
   local -a PIPE_STATUS
@@ -367,6 +388,13 @@ encode_file() {
       -hwaccel_output_format videotoolbox_vld
     )
   fi
+
+  # Source frame rate and a wall-clock anchor, used to keep progress moving when
+  # ffmpeg reports out_time/speed as N/A (see video_frame_rate). Resolved before
+  # the encode so they are visible inside the progress-reading subshell below.
+  local FRAME_RATE
+  FRAME_RATE="$(video_frame_rate "$INPUT")"
+  local PROG_START=$SECONDS
 
   ffmpeg \
     -hide_banner \
@@ -388,6 +416,9 @@ encode_file() {
     "$OUTPUT" |
     while IFS='=' read -r KEY VALUE; do
       case "$KEY" in
+        frame)
+          FRAME="$VALUE"
+          ;;
         fps)
           FPS="$VALUE"
           ;;
@@ -398,21 +429,45 @@ encode_file() {
           SPEED="$VALUE"
           ;;
         progress)
+          # Output position in whole seconds. ffmpeg's VideoToolbox HW-decode
+          # pipeline frequently reports out_time as N/A even while frame/fps
+          # keep advancing, so fall back to (frame / source fps) to keep the
+          # percentage and ETA from stalling at zero.
+          local PROG_OUT=0
+          case "$OUT_TIME_US" in
+            ''|*[!0-9]*) PROG_OUT=0 ;;
+            *) PROG_OUT=$(( OUT_TIME_US / 1000000 )) ;;
+          esac
+          if (( PROG_OUT == 0 )) && [[ "$FRAME" == <-> ]] && (( FRAME > 0 )); then
+            PROG_OUT=$(awk -v f="$FRAME" -v r="$FRAME_RATE" \
+              'BEGIN { if (r + 0 > 0) printf "%d", f / r; else print 0 }')
+          fi
+          if (( DURATION_SECONDS > 0 && PROG_OUT > DURATION_SECONDS )); then
+            PROG_OUT=$DURATION_SECONDS
+          fi
+
+          # Prefer ffmpeg's speed; when it is N/A, derive it from output
+          # position versus wall-clock time so the ETA can still be computed.
+          local PROG_SPEED="$SPEED"
+          if [[ "$SPEED" == "N/A" || "$SPEED" == "?" || -z "$SPEED" ]]; then
+            local WALL=$(( SECONDS - PROG_START ))
+            if (( WALL > 0 && PROG_OUT > 0 )); then
+              PROG_SPEED="$(awk -v o="$PROG_OUT" -v w="$WALL" \
+                'BEGIN { printf "%.2fx", o / w }')"
+            else
+              PROG_SPEED="?"
+            fi
+          fi
+
           show_encode_progress "$COMPLETED" "$TOTAL" "$STATUS" \
-            "$DURATION_SECONDS" "$OUT_TIME_US" "$FPS" "$SPEED"
+            "$DURATION_SECONDS" "$(( PROG_OUT * 1000000 ))" "$FPS" "$PROG_SPEED"
           if (( SMT_MACHINE )); then
-            local PROG_OUT=0
             local PROG_PCT=0
-            case "$OUT_TIME_US" in
-              ''|*[!0-9]*) PROG_OUT=0 ;;
-              *) PROG_OUT=$(( OUT_TIME_US / 1000000 )) ;;
-            esac
             if (( DURATION_SECONDS > 0 )); then
-              (( PROG_OUT > DURATION_SECONDS )) && PROG_OUT=$DURATION_SECONDS
               PROG_PCT=$(( PROG_OUT * 100 / DURATION_SECONDS ))
             fi
             emit file_prog "pct=$PROG_PCT" "out=$PROG_OUT" \
-              "dur=$DURATION_SECONDS" "fps=$FPS" "speed=$SPEED"
+              "dur=$DURATION_SECONDS" "fps=$FPS" "speed=$PROG_SPEED"
           fi
           ;;
       esac
@@ -509,18 +564,89 @@ print_section() {
   fi
 }
 
+# Probe one media file and classify it. Emits exactly one machine event:
+#   queue_item  — needs transcoding (carries codec/res/dur)
+#   scan_skip   — skipped, with reason=worklog|hevc|other
+# It also appends to the TRANSCODE_* arrays and bumps the SKIPPED_* counters, but
+# those parent-side effects only take hold when the probe runs in the foreground
+# (serial scan). In a background probe job they are discarded with the subshell;
+# the daemon instead tallies everything from the emitted events. SCAN_TOTAL and
+# the counters/arrays are resolved via the caller's (scan_library) scope.
+scan_probe_one() {
+  local FILE="$1"
+  local INDEX="$2"
+  local LIBRARY="$3"
+  local RELATIVE_PATH CODEC RESOLUTION DURATION EXT CURRENT_SIZE
+
+  RELATIVE_PATH="$(relative_path "$FILE")"
+
+  # Worklog skip: same file (path + size) was already encoded at this quality and
+  # the HEVC output was not smaller, so we decided to keep the original.
+  if [[ -n "${SMT_SKIP_SIZES[$FILE]:-}" ]]; then
+    CURRENT_SIZE="$(stat -f '%z' "$FILE" 2>/dev/null || printf '0')"
+    if [[ "${SMT_SKIP_SIZES[$FILE]}" == "$CURRENT_SIZE" ]]; then
+      SKIPPED_WORKLOG=$(( SKIPPED_WORKLOG + 1 ))
+      emit scan_skip "reason=worklog" "rel_b64=$(smt_b64 "$RELATIVE_PATH")"
+      finish_item "$INDEX" "$SCAN_TOTAL" \
+        "SCAN SKIP: Kept on a previous run (q$QUALITY): $RELATIVE_PATH"
+      return 0
+    fi
+  fi
+
+  CODEC="$(video_codec "$FILE")"
+  RESOLUTION="$(video_resolution "$FILE")"
+  DURATION="$(video_duration "$FILE")"
+  [[ -z "$DURATION" ]] && DURATION=0
+
+  if [[ -z "$CODEC" || -z "$RESOLUTION" ]]; then
+    SKIPPED_OTHER=$(( SKIPPED_OTHER + 1 ))
+    emit scan_skip "reason=other" "rel_b64=$(smt_b64 "$RELATIVE_PATH")"
+    finish_item "$INDEX" "$SCAN_TOTAL" \
+      "SCAN SKIP: Could not inspect: $RELATIVE_PATH"
+    return 0
+  fi
+
+  # ffprobe reports both H.265 and HEVC as "hevc".
+  if [[ "$CODEC" == "hevc" ]]; then
+    SKIPPED_HEVC=$(( SKIPPED_HEVC + 1 ))
+    emit scan_skip "reason=hevc" "rel_b64=$(smt_b64 "$RELATIVE_PATH")"
+    finish_item "$INDEX" "$SCAN_TOTAL" \
+      "SCAN SKIP: Already HEVC: $RELATIVE_PATH"
+    return 0
+  fi
+
+  EXT="$(printf '%s' "${FILE##*.}" | tr '[:upper:]' '[:lower:]')"
+
+  case "$EXT" in
+    mkv|mp4|m4v|mov)
+      TRANSCODE_FILES+=("$FILE")
+      TRANSCODE_LIBRARIES+=("$LIBRARY")
+      TRANSCODE_CODECS+=("$CODEC")
+      TRANSCODE_RESOLUTIONS+=("$RESOLUTION")
+      TRANSCODE_DURATIONS+=("$DURATION")
+      emit queue_item "codec=$CODEC" "res=$RESOLUTION" "dur=$DURATION" \
+        "rel_b64=$(smt_b64 "$RELATIVE_PATH")" "path_b64=$(smt_b64 "$FILE")"
+      finish_item "$INDEX" "$SCAN_TOTAL" \
+        "QUEUE: $RELATIVE_PATH ($CODEC -> hevc, $RESOLUTION)"
+      ;;
+    *)
+      SKIPPED_OTHER=$(( SKIPPED_OTHER + 1 ))
+      emit scan_skip "reason=other" "rel_b64=$(smt_b64 "$RELATIVE_PATH")"
+      finish_item "$INDEX" "$SCAN_TOTAL" \
+        "SCAN SKIP: Unsupported container: $RELATIVE_PATH"
+      ;;
+  esac
+  return 0
+}
+
 scan_library() {
   local LIBRARY_INPUT="$1"
   local LIBRARY=""
   local FILE=""
-  local RELATIVE_PATH=""
-  local CODEC=""
-  local RESOLUTION=""
-  local DURATION=0
-  local EXT=""
   local SCAN_CURRENT=0
   local SCAN_TOTAL=0
   local QUEUED_BEFORE=0
+  local SCAN_JOBS=1
   local -a FILES
 
   # Normalize the path so displayed filenames can be relative to the library root.
@@ -546,88 +672,71 @@ scan_library() {
   TOTAL_FILES=$(( TOTAL_FILES + SCAN_TOTAL ))
   QUEUED_BEFORE=${#TRANSCODE_FILES[@]}
 
+  emit scan_total "total=$SCAN_TOTAL"
+
   if (( SCAN_TOTAL == 0 )); then
-    emit scan_done "queued=${#TRANSCODE_FILES[@]}" "total=$SCAN_TOTAL" \
-      "skipped_hevc=$SKIPPED_HEVC" "skipped_other=$SKIPPED_OTHER" \
-      "skipped_worklog=$SKIPPED_WORKLOG"
+    emit scan_done "queued=${#TRANSCODE_FILES[@]}" "total=$SCAN_TOTAL"
     echo "No supported media files found."
     return
   fi
 
   show_progress 0 "$SCAN_TOTAL" "Scanning"
 
-  for FILE in "${FILES[@]}"; do
-    SCAN_CURRENT=$(( SCAN_CURRENT + 1 ))
-    RELATIVE_PATH="$(relative_path "$FILE")"
+  # How many files to probe at once. Parallel probing is only used when the
+  # daemon drives the scan (SMT_MACHINE); interactive/standalone scans stay
+  # serial so the live progress bar and printed summary stay coherent (and the
+  # SKIPPED_* counters, which a background subshell cannot propagate, are right).
+  SCAN_JOBS="${SMT_SCAN_JOBS:-1}"
+  case "$SCAN_JOBS" in ''|*[!0-9]*) SCAN_JOBS=1 ;; esac
+  (( SCAN_JOBS < 1 )) && SCAN_JOBS=1
 
-    show_progress $(( SCAN_CURRENT - 1 )) "$SCAN_TOTAL" \
-      "Scanning: $RELATIVE_PATH"
+  if (( SCAN_JOBS <= 1 || ! SMT_MACHINE )); then
+    for FILE in "${FILES[@]}"; do
+      SCAN_CURRENT=$(( SCAN_CURRENT + 1 ))
+      show_progress $(( SCAN_CURRENT - 1 )) "$SCAN_TOTAL" \
+        "Scanning: $(relative_path "$FILE")"
+      scan_probe_one "$FILE" "$SCAN_CURRENT" "$LIBRARY"
+    done
+  else
+    # Probe up to SCAN_JOBS files concurrently. Each job writes its event lines
+    # to its own temp file; the parent prints them in order once a batch finishes
+    # so the daemon never sees interleaved partial lines from concurrent writers.
+    local SCAN_TMPDIR="" IDX INFLIGHT=0
+    local -a BATCH
+    SCAN_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/smt-scan.XXXXXX" 2>/dev/null)" || SCAN_TMPDIR=""
 
-    emit scan_prog "index=$SCAN_CURRENT" "total=$SCAN_TOTAL" \
-      "queued=${#TRANSCODE_FILES[@]}" "rel_b64=$(smt_b64 "$RELATIVE_PATH")"
-
-    # Worklog skip: if this exact file (path + size) was already encoded at this
-    # quality on a previous run and the HEVC output was not smaller, we decided
-    # to keep the original. Skip it now without re-probing or re-encoding.
-    if [[ -n "${SMT_SKIP_SIZES[$FILE]:-}" ]]; then
-      local CURRENT_SIZE
-      CURRENT_SIZE="$(stat -f '%z' "$FILE" 2>/dev/null || printf '0')"
-      if [[ "${SMT_SKIP_SIZES[$FILE]}" == "$CURRENT_SIZE" ]]; then
-        SKIPPED_WORKLOG=$(( SKIPPED_WORKLOG + 1 ))
-        finish_item "$SCAN_CURRENT" "$SCAN_TOTAL" \
-          "SCAN SKIP: Kept on a previous run (q$QUALITY): $RELATIVE_PATH"
-        continue
-      fi
+    if [[ -z "$SCAN_TMPDIR" ]]; then
+      for FILE in "${FILES[@]}"; do
+        SCAN_CURRENT=$(( SCAN_CURRENT + 1 ))
+        scan_probe_one "$FILE" "$SCAN_CURRENT" "$LIBRARY"
+      done
+    else
+      BATCH=()
+      for FILE in "${FILES[@]}"; do
+        SCAN_CURRENT=$(( SCAN_CURRENT + 1 ))
+        scan_probe_one "$FILE" "$SCAN_CURRENT" "$LIBRARY" \
+          > "$SCAN_TMPDIR/$SCAN_CURRENT" 2>/dev/null &
+        BATCH+=("$SCAN_CURRENT")
+        if (( ++INFLIGHT >= SCAN_JOBS )); then
+          wait
+          for IDX in "${BATCH[@]}"; do
+            cat "$SCAN_TMPDIR/$IDX" 2>/dev/null
+            rm -f "$SCAN_TMPDIR/$IDX"
+          done
+          BATCH=()
+          INFLIGHT=0
+        fi
+      done
+      wait
+      for IDX in "${BATCH[@]}"; do
+        cat "$SCAN_TMPDIR/$IDX" 2>/dev/null
+        rm -f "$SCAN_TMPDIR/$IDX"
+      done
+      rmdir "$SCAN_TMPDIR" 2>/dev/null
     fi
+  fi
 
-    CODEC="$(video_codec "$FILE")"
-    RESOLUTION="$(video_resolution "$FILE")"
-    DURATION="$(video_duration "$FILE")"
-    if [[ -z "$DURATION" ]]; then
-      DURATION=0
-    fi
-
-    if [[ -z "$CODEC" || -z "$RESOLUTION" ]]; then
-      SKIPPED_OTHER=$(( SKIPPED_OTHER + 1 ))
-      finish_item "$SCAN_CURRENT" "$SCAN_TOTAL" \
-        "SCAN SKIP: Could not inspect: $RELATIVE_PATH"
-      continue
-    fi
-
-    # ffprobe reports both H.265 and HEVC as "hevc".
-    if [[ "$CODEC" == "hevc" ]]; then
-      SKIPPED_HEVC=$(( SKIPPED_HEVC + 1 ))
-      finish_item "$SCAN_CURRENT" "$SCAN_TOTAL" \
-        "SCAN SKIP: Already HEVC: $RELATIVE_PATH"
-      continue
-    fi
-
-    EXT="$(printf '%s' "${FILE##*.}" | tr '[:upper:]' '[:lower:]')"
-
-    case "$EXT" in
-      mkv|mp4|m4v|mov)
-        TRANSCODE_FILES+=("$FILE")
-        TRANSCODE_LIBRARIES+=("$LIBRARY")
-        TRANSCODE_CODECS+=("$CODEC")
-        TRANSCODE_RESOLUTIONS+=("$RESOLUTION")
-        TRANSCODE_DURATIONS+=("$DURATION")
-        emit queue_item "codec=$CODEC" "res=$RESOLUTION" "dur=$DURATION" \
-          "rel_b64=$(smt_b64 "$RELATIVE_PATH")" "path_b64=$(smt_b64 "$FILE")"
-        finish_item "$SCAN_CURRENT" "$SCAN_TOTAL" \
-          "QUEUE: $RELATIVE_PATH ($CODEC -> hevc, $RESOLUTION)"
-        ;;
-      *)
-        SKIPPED_OTHER=$(( SKIPPED_OTHER + 1 ))
-        finish_item "$SCAN_CURRENT" "$SCAN_TOTAL" \
-          "SCAN SKIP: Unsupported container: $RELATIVE_PATH"
-        continue
-        ;;
-    esac
-  done
-
-  emit scan_done "queued=${#TRANSCODE_FILES[@]}" "total=$SCAN_TOTAL" \
-    "skipped_hevc=$SKIPPED_HEVC" "skipped_other=$SKIPPED_OTHER" \
-    "skipped_worklog=$SKIPPED_WORKLOG"
+  emit scan_done "queued=${#TRANSCODE_FILES[@]}" "total=$SCAN_TOTAL"
 
   if (( INTERACTIVE )); then
     show_progress "$SCAN_CURRENT" "$SCAN_TOTAL" \

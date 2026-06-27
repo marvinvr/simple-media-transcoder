@@ -3,16 +3,41 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="light dark">
 <meta name="robots" content="noindex">
 <title>SMT · simple-media-transcoder</title>
+<script>
+  // Resolve theme before first paint to avoid a flash of the wrong palette.
+  (function () {
+    try {
+      var t = localStorage.getItem("smt-theme");
+      if (t !== "light" && t !== "dark") {
+        t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark";
+      }
+      document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {
+      document.documentElement.setAttribute("data-theme", "dark");
+    }
+  })();
+</script>
 <style>
   :root {
+    /* Shape + type tokens (shared across themes) */
+    --radius: 6px;       /* cards, modal */
+    --radius-sm: 5px;    /* buttons, inputs */
+    --radius-xs: 4px;    /* pills, chips, badges */
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  :root[data-theme="dark"] {
+    color-scheme: dark;
     --bg: #0d1117;
     --bg-elev: #161b22;
     --bg-elev2: #1b222c;
-    --border: #232b36;
+    --border: #2a313c;
     --border-soft: #20262f;
+    --border-strong: #3a4452;
     --text: #e6edf3;
     --muted: #8b949e;
     --faint: #6e7681;
@@ -20,12 +45,35 @@
     --accent-hover: #3fb950;
     --blue: #2f81f7;
     --danger: #f85149;
-    --danger-bg: rgba(248, 81, 73, 0.12);
-    --green-bg: rgba(46, 160, 67, 0.14);
+    --warn: #e3b341;
+    --danger-bg: rgba(248, 81, 73, 0.14);
+    --green-bg: rgba(46, 160, 67, 0.16);
     --grey-bg: rgba(139, 148, 158, 0.14);
-    --radius: 14px;
-    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
-    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --blue-bg: rgba(47, 129, 247, 0.14);
+    --warn-bg: rgba(227, 179, 65, 0.12);
+  }
+
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #ffffff;
+    --bg-elev: #f6f8fa;
+    --bg-elev2: #eaeef2;
+    --border: #d0d7de;
+    --border-soft: #e6eaef;
+    --border-strong: #b8c0c9;
+    --text: #1f2328;
+    --muted: #59636e;
+    --faint: #818b98;
+    --accent: #1a7f37;
+    --accent-hover: #1f883d;
+    --blue: #0969da;
+    --danger: #cf222e;
+    --warn: #9a6700;
+    --danger-bg: rgba(207, 34, 46, 0.10);
+    --green-bg: rgba(26, 127, 55, 0.10);
+    --grey-bg: rgba(89, 99, 110, 0.10);
+    --blue-bg: rgba(9, 105, 218, 0.10);
+    --warn-bg: rgba(154, 103, 0, 0.10);
   }
 
   * { box-sizing: border-box; }
@@ -53,9 +101,7 @@
     position: sticky;
     top: 0;
     z-index: 20;
-    background: rgba(13, 17, 23, 0.85);
-    backdrop-filter: saturate(140%) blur(10px);
-    -webkit-backdrop-filter: saturate(140%) blur(10px);
+    background: var(--bg);
     border-bottom: 1px solid var(--border);
   }
 
@@ -78,21 +124,25 @@
   .logo {
     width: 30px;
     height: 30px;
-    border-radius: 8px;
-    background: linear-gradient(135deg, #2ea043, #1f6feb);
+    border-radius: var(--radius-xs);
+    background: var(--accent);
     display: flex;
     align-items: center;
     justify-content: center;
+    font-family: var(--mono);
     font-weight: 700;
     font-size: 11px;
+    letter-spacing: 0.02em;
     color: #fff;
     flex: 0 0 auto;
   }
 
   .title h1 {
-    font-size: 15px;
+    font-family: var(--mono);
+    font-size: 14px;
     margin: 0;
     font-weight: 600;
+    letter-spacing: -0.2px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -106,10 +156,13 @@
     display: inline-flex;
     align-items: center;
     gap: 7px;
-    font-size: 12px;
+    font-family: var(--mono);
+    font-size: 11px;
     font-weight: 600;
-    padding: 6px 11px;
-    border-radius: 999px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 5px 10px;
+    border-radius: var(--radius-xs);
     border: 1px solid var(--border);
     background: var(--bg-elev);
     color: var(--muted);
@@ -135,18 +188,18 @@
   }
 
   @keyframes pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.55); opacity: 1; }
-    50% { box-shadow: 0 0 0 5px rgba(63, 185, 80, 0); opacity: 0.6; }
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
   }
 
   .iconbtn {
     background: var(--bg-elev);
     border: 1px solid var(--border);
     color: var(--text);
-    border-radius: 9px;
+    border-radius: var(--radius-sm);
     width: 34px;
     height: 34px;
-    font-size: 16px;
+    font-size: 15px;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
@@ -154,7 +207,7 @@
     flex: 0 0 auto;
     transition: background 0.15s, border-color 0.15s;
   }
-  .iconbtn:hover { background: var(--bg-elev2); border-color: #2d3744; }
+  .iconbtn:hover { background: var(--bg-elev2); border-color: var(--border-strong); }
 
   .linkbtn {
     background: none;
@@ -173,18 +226,20 @@
     display: none;
     align-items: center;
     gap: 8px;
+    font-family: var(--mono);
     font-size: 12px;
-    color: #e3b341;
-    background: rgba(227, 179, 65, 0.1);
-    border: 1px solid rgba(227, 179, 65, 0.3);
-    border-radius: 8px;
+    color: var(--warn);
+    background: var(--warn-bg);
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--warn);
+    border-radius: var(--radius-sm);
     padding: 8px 12px;
     margin-top: 14px;
   }
   .reconnect.show { display: flex; }
   .reconnect .dot {
     width: 7px; height: 7px; border-radius: 50%;
-    background: #e3b341; animation: pulse 1.2s ease-in-out infinite;
+    background: var(--warn); animation: pulse 1.2s ease-in-out infinite;
   }
 
   /* ---------- Controls ---------- */
@@ -203,8 +258,8 @@
     font-family: var(--sans);
     font-size: 14px;
     font-weight: 600;
-    padding: 10px 18px;
-    border-radius: 10px;
+    padding: 9px 16px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
     transition: background 0.15s, border-color 0.15s, opacity 0.15s;
     display: inline-flex;
@@ -237,9 +292,10 @@
   }
 
   .card h2 {
-    font-size: 13px;
+    font-family: var(--mono);
+    font-size: 12px;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.08em;
     color: var(--muted);
     margin: 0 0 14px;
     font-weight: 600;
@@ -257,20 +313,38 @@
   .mono { font-family: var(--mono); }
   .hidden { display: none !important; }
 
+  /* Inline line-icons (currentColor) */
+  .ico {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .iconbtn .ico { width: 17px; height: 17px; }
+
+  /* Theme toggle: show the icon for the active theme. */
+  :root[data-theme="dark"] #themeBtn .ico-sun { display: none; }
+  :root[data-theme="light"] #themeBtn .ico-moon { display: none; }
+
   /* ---------- Progress card ---------- */
   .phase {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    font-size: 12px;
+    font-family: var(--mono);
+    font-size: 11px;
     font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
     color: var(--blue);
-    background: rgba(47, 129, 247, 0.12);
-    border: 1px solid rgba(47, 129, 247, 0.3);
-    padding: 4px 10px;
-    border-radius: 999px;
+    background: var(--blue-bg);
+    border: 1px solid var(--border);
+    padding: 4px 9px;
+    border-radius: var(--radius-xs);
   }
-  .phase.transcoding { color: var(--accent-hover); background: var(--green-bg); border-color: rgba(46,160,67,0.35); }
+  .phase.transcoding { color: var(--accent-hover); background: var(--green-bg); }
 
   .prog-section { margin-top: 16px; }
 
@@ -293,22 +367,21 @@
   .prog-meta .right { font-family: var(--mono); color: var(--text); }
 
   .progress {
-    height: 9px;
+    height: 6px;
     background: var(--bg);
     border: 1px solid var(--border-soft);
-    border-radius: 999px;
+    border-radius: 3px;
     overflow: hidden;
   }
   .progress > i {
     display: block;
     height: 100%;
     width: 0;
-    border-radius: 999px;
-    background: linear-gradient(90deg, #1f6feb, #2ea043);
+    background: var(--blue);
     transition: width 0.4s ease;
   }
   .progress.file > i {
-    background: linear-gradient(90deg, #2ea043, #3fb950);
+    background: var(--accent);
   }
 
   .curfile {
@@ -338,16 +411,17 @@
     margin-top: 16px;
   }
   .chip {
+    font-family: var(--mono);
     font-size: 12px;
-    padding: 5px 11px;
-    border-radius: 999px;
+    padding: 4px 10px;
+    border-radius: var(--radius-xs);
     background: var(--grey-bg);
     color: var(--muted);
     font-weight: 500;
   }
   .chip b { color: var(--text); font-weight: 700; }
   .chip.ok b { color: var(--accent-hover); }
-  .chip.warn b { color: #e3b341; }
+  .chip.warn b { color: var(--warn); }
   .chip.bad b { color: var(--danger); }
 
   .elapsed {
@@ -355,6 +429,81 @@
     color: var(--muted);
   }
   .elapsed b { color: var(--text); font-family: var(--mono); }
+
+  /* Run estimates (projected ETA + savings for the active run). */
+  .estimates {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-soft);
+  }
+  .est {
+    flex: 1 1 150px;
+    background: var(--bg);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+  }
+  .est-lbl {
+    display: block;
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .est-val {
+    font-family: var(--mono);
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -0.3px;
+  }
+  .est-sub { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-top: 3px; }
+  .est-val.green { color: var(--accent-hover); }
+
+  /* Live concurrency stepper (adjust workers mid-run). */
+  .conc-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+  }
+  .conc-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+  }
+  .conc-step { display: inline-flex; align-items: center; gap: 8px; }
+  .conc-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg-elev2);
+    color: var(--text);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+  }
+  .conc-btn:hover:not(:disabled) { background: var(--bg-elev); border-color: var(--border-strong); }
+  .conc-btn:disabled { opacity: 0.4; cursor: default; }
+  .conc-val {
+    font-family: var(--mono);
+    font-size: 16px;
+    font-weight: 700;
+    min-width: 22px;
+    text-align: center;
+  }
+  .conc-hint { font-family: var(--mono); font-size: 12px; color: var(--faint); }
 
   /* ---------- Lifetime stats ---------- */
   .stats-grid {
@@ -365,7 +514,7 @@
   .stat {
     background: var(--bg);
     border: 1px solid var(--border-soft);
-    border-radius: 11px;
+    border-radius: var(--radius);
     padding: 14px;
   }
   .stat .num {
@@ -376,6 +525,7 @@
     letter-spacing: -0.5px;
   }
   .stat .lbl {
+    font-family: var(--mono);
     font-size: 11px;
     color: var(--muted);
     margin-top: 5px;
@@ -395,6 +545,7 @@
   }
   thead th {
     text-align: left;
+    font-family: var(--mono);
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -426,10 +577,11 @@
 
   .badge {
     display: inline-block;
+    font-family: var(--mono);
     font-size: 11px;
     font-weight: 600;
-    padding: 3px 9px;
-    border-radius: 999px;
+    padding: 2px 8px;
+    border-radius: var(--radius-xs);
     white-space: nowrap;
   }
   .badge.replaced { background: var(--green-bg); color: var(--accent-hover); }
@@ -442,6 +594,25 @@
     color: var(--faint);
     padding: 26px 10px;
     font-size: 13px;
+  }
+
+  /* ---------- Pagination ---------- */
+  .pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    margin-top: 16px;
+  }
+  .pager.hidden { display: none; }
+  .pager .btn { padding: 7px 12px; font-size: 13px; }
+  .pager-info {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    min-width: 130px;
+    text-align: center;
+    letter-spacing: 0.02em;
   }
 
   /* ---------- Past runs ---------- */
@@ -458,25 +629,26 @@
   .run-row:last-child { border-bottom: none; }
   .run-row .when { color: var(--muted); min-width: 130px; }
   .run-row .trig {
+    font-family: var(--mono);
     font-size: 11px;
     color: var(--faint);
     border: 1px solid var(--border);
     padding: 1px 7px;
-    border-radius: 6px;
+    border-radius: var(--radius-xs);
   }
   .run-row .counts { color: var(--text); font-family: var(--mono); font-size: 12px; }
   .run-row .saved { margin-left: auto; font-family: var(--mono); font-weight: 600; }
-  .run-row .rstatus { font-size: 11px; font-weight: 600; }
+  .run-row .rstatus { font-family: var(--mono); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
   .rstatus.completed { color: var(--accent-hover); }
   .rstatus.running { color: var(--blue); }
-  .rstatus.stopped { color: #e3b341; }
+  .rstatus.stopped { color: var(--warn); }
   .rstatus.failed { color: var(--danger); }
 
   /* ---------- Modal ---------- */
   .modal-back {
     position: fixed;
     inset: 0;
-    background: rgba(1, 4, 9, 0.7);
+    background: rgba(0, 0, 0, 0.5);
     display: none;
     align-items: flex-start;
     justify-content: center;
@@ -492,7 +664,6 @@
     width: 100%;
     max-width: 540px;
     margin: auto;
-    box-shadow: 0 24px 70px rgba(0,0,0,0.5);
   }
   .modal-head {
     display: flex;
@@ -525,7 +696,7 @@
     width: 100%;
     background: var(--bg);
     border: 1px solid var(--border);
-    border-radius: 9px;
+    border-radius: var(--radius-sm);
     color: var(--text);
     font-size: 15px;
     padding: 9px 11px;
@@ -534,7 +705,7 @@
   }
   .txt:focus, .modal input[type="time"]:focus {
     border-color: var(--blue);
-    box-shadow: 0 0 0 3px rgba(47,129,247,0.22);
+    box-shadow: 0 0 0 2px var(--blue-bg);
   }
 
   .path-row {
@@ -548,33 +719,39 @@
     flex: 0 0 auto;
     width: 36px;
     height: 36px;
-    border-radius: 9px;
+    border-radius: var(--radius-sm);
     border: 1px solid var(--border);
     background: var(--bg);
     color: var(--muted);
     cursor: pointer;
-    font-size: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
-  .path-remove:hover { color: var(--danger); border-color: rgba(248,81,73,0.4); }
+  .path-remove:hover { color: var(--danger); border-color: var(--danger); }
   .addpath {
     margin-top: 4px;
     background: none;
     border: 1px dashed var(--border);
     color: var(--muted);
-    border-radius: 9px;
+    border-radius: var(--radius-sm);
     padding: 8px 12px;
     font-size: 13px;
     cursor: pointer;
     width: 100%;
     font-family: var(--sans);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
   }
-  .addpath:hover { color: var(--text); border-color: #3a4452; }
+  .addpath:hover { color: var(--text); border-color: var(--border-strong); }
 
   /* ---------- Library editor rows ---------- */
   .lib-row {
     border: 1px solid var(--border-soft);
     background: var(--bg);
-    border-radius: 11px;
+    border-radius: var(--radius);
     padding: 12px;
     margin-bottom: 10px;
   }
@@ -644,14 +821,14 @@
   .day {
     width: 38px;
     height: 36px;
-    border-radius: 9px;
+    border-radius: var(--radius-sm);
     border: 1px solid var(--border);
     background: var(--bg);
     color: var(--muted);
+    font-family: var(--mono);
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
-    font-family: var(--sans);
   }
   .day.on { background: var(--accent); border-color: var(--accent); color: #fff; }
   .sched-disabled { opacity: 0.45; pointer-events: none; }
@@ -674,19 +851,19 @@
   .toast {
     background: var(--bg-elev2);
     border: 1px solid var(--border);
+    border-left: 2px solid var(--border-strong);
     color: var(--text);
     font-size: 13px;
-    padding: 11px 16px;
-    border-radius: 10px;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+    padding: 10px 14px;
+    border-radius: var(--radius-sm);
     opacity: 0;
     transform: translateY(8px);
     transition: opacity 0.2s, transform 0.2s;
     max-width: 100%;
   }
   .toast.show { opacity: 1; transform: translateY(0); }
-  .toast.ok { border-color: rgba(46,160,67,0.5); }
-  .toast.err { border-color: rgba(248,81,73,0.5); color: #ffb3ad; }
+  .toast.ok { border-left-color: var(--accent); }
+  .toast.err { border-left-color: var(--danger); color: var(--danger); }
 
   .muted-note { color: var(--muted); font-size: 13px; }
 
@@ -706,7 +883,7 @@
     tbody tr {
       background: var(--bg);
       border: 1px solid var(--border-soft);
-      border-radius: 11px;
+      border-radius: var(--radius);
       padding: 12px 14px;
       margin-bottom: 10px;
     }
@@ -754,7 +931,13 @@
       <span id="pillText">…</span>
       <span class="sched" id="pillSched"></span>
     </span>
-    <button class="iconbtn" id="gearBtn" title="Settings" aria-label="Settings">⚙</button>
+    <button class="iconbtn" id="themeBtn" title="Toggle theme" aria-label="Toggle theme">
+      <svg class="ico ico-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+      <svg class="ico ico-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+    </button>
+    <button class="iconbtn" id="gearBtn" title="Settings" aria-label="Settings">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+    </button>
   </div>
 </header>
 
@@ -766,8 +949,14 @@
 
   <!-- Controls -->
   <div class="controls">
-    <button class="btn btn-primary" id="runBtn">▶ Run now</button>
-    <button class="btn btn-danger" id="stopBtn" disabled>■ Stop</button>
+    <button class="btn btn-primary" id="runBtn">
+      <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+      Run now
+    </button>
+    <button class="btn btn-danger" id="stopBtn" disabled>
+      <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+      Stop
+    </button>
   </div>
   <div class="muted-note" style="margin-top: 8px;">Runs all enabled libraries.</div>
 
@@ -776,6 +965,20 @@
     <div class="head-row">
       <span class="phase" id="phaseLabel">Scanning…</span>
       <span class="elapsed">Elapsed <b id="elapsed">0:00</b></span>
+    </div>
+
+    <div class="conc-row" id="concRow">
+      <span class="conc-label">Concurrent</span>
+      <span class="conc-step">
+        <button class="conc-btn" id="concDown" type="button" aria-label="Fewer concurrent transcodes">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M5 12h14"/></svg>
+        </button>
+        <span class="conc-val" id="concNow">—</span>
+        <button class="conc-btn" id="concUp" type="button" aria-label="More concurrent transcodes">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+        </button>
+      </span>
+      <span class="conc-hint" id="concHint"></span>
     </div>
 
     <div class="prog-section">
@@ -795,6 +998,26 @@
       <span class="chip warn">kept <b id="cKept">0</b></span>
       <span class="chip hidden" id="chipSkipped" title="Already evaluated and kept at this quality on a previous run — skipped without re-encoding">skipped <b id="cSkipped">0</b></span>
       <span class="chip bad">failed <b id="cFailed">0</b></span>
+    </div>
+
+    <!-- Projected ETA + savings for the active run, estimated from the files
+         processed so far. Hidden until there is enough data to be meaningful. -->
+    <div class="estimates hidden" id="estimates">
+      <div class="est">
+        <span class="est-lbl">Est. time left</span>
+        <span class="est-val" id="estEta">—</span>
+        <span class="est-sub" id="estEtaSub"></span>
+      </div>
+      <div class="est">
+        <span class="est-lbl">Projected savings</span>
+        <span class="est-val green" id="estSaved">—</span>
+        <span class="est-sub" id="estSavedSub"></span>
+      </div>
+      <div class="est">
+        <span class="est-lbl">Replace rate</span>
+        <span class="est-val" id="estRate">—</span>
+        <span class="est-sub" id="estRateSub"></span>
+      </div>
     </div>
   </section>
 
@@ -844,6 +1067,17 @@
         </tbody>
       </table>
     </div>
+    <div class="pager hidden" id="historyPager">
+      <button class="btn" id="histPrev" type="button" disabled>
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+        Prev
+      </button>
+      <span class="pager-info" id="histPageInfo"></span>
+      <button class="btn" id="histNext" type="button" disabled>
+        Next
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+      </button>
+    </div>
   </section>
 
   <!-- Past runs -->
@@ -861,7 +1095,9 @@
   <div class="modal" role="dialog" aria-modal="true" aria-label="Settings">
     <div class="modal-head">
       <h2>Settings</h2>
-      <button class="iconbtn" id="closeSettings" aria-label="Close">✕</button>
+      <button class="iconbtn" id="closeSettings" aria-label="Close">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
     </div>
     <div class="modal-body" id="settingsBody">
       <div class="muted-note" id="settingsLoading">Loading…</div>
@@ -870,7 +1106,10 @@
         <div class="field">
           <label>Libraries</label>
           <div id="libList"></div>
-          <button class="addpath" id="addLibrary" type="button">+ Add library</button>
+          <button class="addpath" id="addLibrary" type="button">
+            <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+            Add library
+          </button>
           <div class="help">Each library is transcoded at its own quality. Higher = better quality, larger files.</div>
         </div>
 
@@ -886,10 +1125,19 @@
         <div class="field">
           <label>Concurrent transcodes</label>
           <div class="range-row">
-            <input type="range" id="concurrency" min="1" max="8" value="3">
+            <input type="range" id="concurrency" min="1" max="32" value="3">
             <span class="range-val" id="concurrencyVal">3</span>
           </div>
           <div class="help">How many files to transcode at the same time. Higher uses more CPU/GPU and disk I/O.</div>
+        </div>
+
+        <div class="field">
+          <label>Concurrent scan probes</label>
+          <div class="range-row">
+            <input type="range" id="scanConcurrency" min="1" max="32" value="6">
+            <span class="range-val" id="scanConcurrencyVal">6</span>
+          </div>
+          <div class="help">How many files to inspect at once while scanning. Probing is light, so this can be higher.</div>
         </div>
 
         <div class="field">
@@ -959,6 +1207,20 @@
     if (sec < 60) return sec + "s";
     var h = Math.floor(sec / 3600);
     var m = Math.floor((sec % 3600) / 60);
+    if (h > 0) return h + "h " + m + "m";
+    return m + "m";
+  }
+
+  // Long ETA that can span days, e.g. "3d 7h", "5h 12m", "8m". Used for the
+  // whole-run estimate, which is often hours or days.
+  function formatLongEta(sec) {
+    if (sec === null || sec === undefined || isNaN(sec)) return "—";
+    sec = Math.max(0, Math.floor(Number(sec)));
+    if (sec < 60) return sec + "s";
+    var d = Math.floor(sec / 86400);
+    var h = Math.floor((sec % 86400) / 3600);
+    var m = Math.floor((sec % 3600) / 60);
+    if (d > 0) return d + "d " + h + "h";
     if (h > 0) return h + "h " + m + "m";
     return m + "m";
   }
@@ -1053,6 +1315,11 @@
   var statusTimer = null;
   var slowTimer = null;
   var configCache = null;
+  var currentRunId = null;    // runId of the active run (for prediction sampling)
+  var predRunId = null;       // run the savings accumulator belongs to
+  var predById = null;        // Map<fileId, {id,enc,saved,status}> for that run
+  var predReady = false;      // full-run backfill done, so "saved so far" is exact
+  var predSeeding = false;    // a backfill paging pass is currently in flight
 
   /* ============ Header pill + controls ============ */
 
@@ -1192,21 +1459,21 @@
   }
 
   function renderProgress(run) {
+    currentRunId = run.runId != null ? run.runId : null;
     // Phase
     var scanning = run.phase === "scanning";
     if (scanning) {
-      phaseLabel.textContent = "Scanning…";
+      phaseLabel.textContent = run.scanConcurrency > 1 ? "Scanning · " + run.scanConcurrency + "×" : "Scanning…";
       phaseLabel.classList.remove("transcoding");
     } else {
-      phaseLabel.textContent = "Transcoding";
+      phaseLabel.textContent = run.concurrency > 1 ? "Transcoding · " + run.concurrency + "×" : "Transcoding";
       phaseLabel.classList.add("transcoding");
     }
 
-    if (!scanning && run.concurrency > 1) {
-      phaseLabel.textContent = "Transcoding · " + run.concurrency + "×";
-    }
-
     $("elapsed").textContent = formatDuration(run.elapsedSec);
+
+    // Live concurrency stepper — reflect the current target / running count.
+    syncConcurrency(run);
 
     // Overall bar — during scanning it tracks scan progress (files probed in the
     // current library), during transcoding it tracks files completed overall.
@@ -1261,6 +1528,163 @@
     var skipped = c.skippedWorklog != null ? c.skippedWorklog : 0;
     $("cSkipped").textContent = skipped;
     $("chipSkipped").classList.toggle("hidden", skipped <= 0);
+
+    // Whole-run estimates (ETA + projected savings).
+    renderPredictions(run);
+  }
+
+  /* ============ Run predictions (ETA + projected savings) ============ */
+
+  // Estimate how long the whole run will take and how much it will save, from
+  // the files finished so far. Inputs come from the live status (queueTotal,
+  // completed, encoded, concurrency) plus an accumulator (predById) holding
+  // every finished file of the active run, so it needs no daemon changes.
+  //
+  // Savings are exact: the accumulator is seeded from the run's full history
+  // once and kept current by folding in new rows, so "saved so far" is the real
+  // cumulative total (not a sample) and the projection spreads it over all
+  // queued files — kept/failed files that saved nothing pull the average down by
+  // exactly the right amount. ETA instead uses a recent window of per-file
+  // encode times (which already reflect the live concurrency and the hardware
+  // encoder's real throughput) so it tracks current speed rather than being
+  // dragged by stale early files; video durations of upcoming files aren't
+  // exposed, and encode time is the better signal anyway.
+  // Reset the accumulator for a (new) run.
+  function predReset(runId) {
+    predRunId = runId;
+    predById = new Map();
+    predReady = false;
+  }
+
+  // Merge history rows belonging to the active run into the accumulator,
+  // deduplicated by file id, so the same row can arrive from both the backfill
+  // and the rolling poll without being double-counted.
+  function predFold(files) {
+    if (!predById) return;
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      if (f.runId !== predRunId || predById.has(f.id)) continue;
+      predById.set(f.id, {
+        id: f.id,
+        enc: Number(f.encodeSeconds),
+        saved: Number(f.savedBytes) || 0,
+        status: f.status,
+      });
+    }
+  }
+
+  // One-time backfill so the cumulative savings are exact, not just the recent
+  // window. Only one run is ever active, so its rows are the highest ids and, in
+  // history's DESC order, form a contiguous prefix — stop at the first row from
+  // an older run instead of paging the whole table.
+  function predSeed() {
+    if (predSeeding) return;
+    predSeeding = true;
+    var runId = predRunId;
+    var PAGE = 500;
+    var collected = [];
+
+    function page(offset) {
+      return api("/api/history?limit=" + PAGE + "&offset=" + offset).then(function (h) {
+        var files = (h && h.files) || [];
+        var hitOlder = false;
+        for (var i = 0; i < files.length; i++) {
+          if (files[i].runId === runId) collected.push(files[i]);
+          else { hitOlder = true; break; }
+        }
+        if (!hitOlder && files.length === PAGE) return page(offset + PAGE);
+      });
+    }
+
+    page(0)
+      .then(function () {
+        if (predRunId === runId) { predFold(collected); predReady = true; }
+      })
+      .catch(function () {})
+      .then(function () { predSeeding = false; });
+  }
+
+  function computePredictions(run) {
+    var out = { etaSec: null, projectedSaved: null, savedSoFar: null, replacedRate: null,
+                processed: 0, exact: predReady };
+
+    var completed = run.completed || 0;
+    var queueTotal = run.queueTotal || 0;
+    var filesLeft = Math.max(0, queueTotal - completed);
+    var concurrency = Math.max(1, run.concurrency || 1);
+    var encoded = (run.counters && run.counters.encoded) || 0;
+
+    var rows = predById ? Array.from(predById.values()) : [];
+    out.processed = rows.length;
+
+    // ETA — mean encode wall-time per file over a recent window (newest first),
+    // so it tracks current throughput rather than being anchored by stale early
+    // files. (Encode time already reflects the live concurrency and the hardware
+    // encoder's real speed, which is why it beats video-duration here.)
+    var recent = rows.slice().sort(function (a, b) { return b.id - a.id; }).slice(0, 60);
+    var encTimes = [];
+    for (var i = 0; i < recent.length; i++) {
+      if (isFinite(recent[i].enc) && recent[i].enc > 0) encTimes.push(recent[i].enc);
+    }
+    if (filesLeft === 0) {
+      out.etaSec = 0;
+    } else if (encTimes.length >= 2) {
+      var avgEnc = encTimes.reduce(function (a, b) { return a + b; }, 0) / encTimes.length;
+      out.etaSec = (filesLeft * avgEnc) / concurrency;
+    }
+
+    // Savings — exact cumulative for the run (bytes saved on files we actually
+    // replaced; kept/failed files saved nothing). The projection spreads that
+    // over every queued file, so the kept/failed share drags the per-file
+    // average down by exactly the right amount.
+    var savedSoFar = 0;
+    for (var j = 0; j < rows.length; j++) {
+      if (rows[j].status === "replaced") savedSoFar += rows[j].saved;
+    }
+    if (rows.length >= 3) {
+      out.savedSoFar = savedSoFar;
+      out.projectedSaved = (savedSoFar / rows.length) * queueTotal;
+    }
+
+    // Replace rate over the whole run (exact, from the live counters).
+    if (completed > 0) out.replacedRate = encoded / completed;
+
+    return out;
+  }
+
+  var estBox = $("estimates");
+  function renderPredictions(run) {
+    if (run.phase !== "transcoding") { estBox.classList.add("hidden"); return; }
+
+    var p = computePredictions(run);
+    var hasEta = p.etaSec != null;
+    var hasSaved = p.projectedSaved != null;
+    if (!hasEta && !hasSaved) { estBox.classList.add("hidden"); return; }
+    estBox.classList.remove("hidden");
+
+    var filesLeft = Math.max(0, (run.queueTotal || 0) - (run.completed || 0));
+
+    $("estEta").textContent = hasEta ? formatLongEta(p.etaSec) : "—";
+    $("estEtaSub").textContent = hasEta ? (filesLeft.toLocaleString() + " files left") : "gathering data…";
+
+    if (hasSaved) {
+      $("estSaved").textContent = "~" + formatBytes(p.projectedSaved);
+      var soFar = formatBytes(p.savedSoFar) + " so far";
+      $("estSavedSub").textContent = p.exact ? soFar : (soFar + " (computing…)");
+    } else {
+      $("estSaved").textContent = "—";
+      $("estSavedSub").textContent = "";
+    }
+
+    if (p.replacedRate != null) {
+      var pctR = Math.round(p.replacedRate * 100);
+      $("estRate").textContent = pctR + "%";
+      $("estRateSub").textContent = (100 - pctR) + "% kept/failed";
+      $("estRate").title = "Share of processed files actually replaced with a smaller HEVC file; the rest saved no space.";
+    } else {
+      $("estRate").textContent = "—";
+      $("estRateSub").textContent = "";
+    }
   }
 
   /* ============ Lifetime stats ============ */
@@ -1442,6 +1866,58 @@
     });
   }
 
+  /* ============ History pagination ============ */
+
+  // The /api/history endpoint is paged via limit/offset and returns the total
+  // row count, so we drive a simple Prev/Next pager over fixed-size pages.
+
+  var HISTORY_PAGE_SIZE = 25;
+  var historyPage = 0;
+  var historyTotal = 0;
+  var historyPager = $("historyPager");
+
+  function historyPageCount() {
+    return Math.max(1, Math.ceil(historyTotal / HISTORY_PAGE_SIZE));
+  }
+
+  function renderHistoryPager() {
+    // A single page's worth (or fewer) needs no controls.
+    if (historyTotal <= HISTORY_PAGE_SIZE) {
+      historyPager.classList.add("hidden");
+      return;
+    }
+    historyPager.classList.remove("hidden");
+    var pages = historyPageCount();
+    $("histPrev").disabled = historyPage <= 0;
+    $("histNext").disabled = historyPage >= pages - 1;
+    var start = historyPage * HISTORY_PAGE_SIZE + 1;
+    var end = Math.min(historyTotal, (historyPage + 1) * HISTORY_PAGE_SIZE);
+    $("histPageInfo").textContent = start + "–" + end + " of " + historyTotal.toLocaleString();
+  }
+
+  function loadHistory(page) {
+    if (page < 0) page = 0;
+    var offset = page * HISTORY_PAGE_SIZE;
+    return api("/api/history?limit=" + HISTORY_PAGE_SIZE + "&offset=" + offset)
+      .then(function (h) {
+        setOnline(true);
+        historyTotal = (h && h.total) || 0;
+        var pages = historyPageCount();
+        if (page > pages - 1) page = pages - 1;   // clamp (defensive)
+        historyPage = page;
+        renderHistory(h);
+        renderHistoryPager();
+      })
+      .catch(function (err) { if (err && !err.status) setOnline(false); });
+  }
+
+  $("histPrev").addEventListener("click", function () {
+    if (historyPage > 0) loadHistory(historyPage - 1);
+  });
+  $("histNext").addEventListener("click", function () {
+    if (historyPage < historyPageCount() - 1) loadHistory(historyPage + 1);
+  });
+
   /* ============ Polling ============ */
 
   function pollStatus() {
@@ -1466,10 +1942,19 @@
     api("/api/stats")
       .then(function (s) { setOnline(true); renderStats(s); })
       .catch(function (err) { if (!err.status) setOnline(false); });
-    // history
-    api("/api/history?limit=50&offset=0")
-      .then(function (h) { renderHistory(h); })
-      .catch(function () {});
+    // history — keep the newest page live; deeper pages stay put until the user
+    // navigates, so rows don't shuffle under them mid-run.
+    if (historyPage === 0) loadHistory(0);
+    // prediction accumulator — exact whole-run savings plus a recent window for
+    // the ETA. Seed the run's full history once (backfill), then fold in new
+    // rows each poll. Independent of the history table's pagination.
+    if (currentRunId != null) {
+      if (predRunId !== currentRunId) predReset(currentRunId);
+      if (!predReady && !predSeeding) predSeed();
+      api("/api/history?limit=120&offset=0")
+        .then(function (h) { predFold((h && h.files) || []); })
+        .catch(function () {});
+    }
     // runs
     api("/api/runs?limit=20")
       .then(function (r) { renderRuns(r); })
@@ -1539,6 +2024,61 @@
       });
   });
 
+  /* ============ Live concurrency stepper ============ */
+
+  // The progress card exposes a −/+ stepper so the number of concurrent
+  // transcodes can be changed mid-run. POSTing /api/config adapts the running
+  // worker pool live: raising it spawns more workers, lowering it lets the
+  // surplus finish their current file and then stop.
+
+  var MAX_CONCURRENCY = 32;
+  var concNowEl = $("concNow");
+  var concHint = $("concHint");
+  var concDown = $("concDown");
+  var concUp = $("concUp");
+  var shownConcurrency = null;   // value currently shown in the stepper
+  var lastConcAdjust = 0;        // Date.now() of the last user click
+
+  function setConcButtons(n) {
+    concDown.disabled = n <= 1;
+    concUp.disabled = n >= MAX_CONCURRENCY;
+  }
+
+  function nudgeConcurrency(delta) {
+    var n = Math.max(1, Math.min(MAX_CONCURRENCY, (shownConcurrency || 1) + delta));
+    if (n === shownConcurrency) return;
+    shownConcurrency = n;
+    lastConcAdjust = Date.now();
+    concNowEl.textContent = n;
+    setConcButtons(n);
+    api("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ concurrency: n })
+    })
+      .then(function (cfg) { if (cfg) configCache = cfg; })
+      .catch(function () { toast("Could not change concurrency", "err"); });
+  }
+
+  concDown.addEventListener("click", function () { nudgeConcurrency(-1); });
+  concUp.addEventListener("click", function () { nudgeConcurrency(1); });
+
+  // Reflect the live target from a status snapshot, unless the user just nudged
+  // it — give the backend ~1.5s to catch up so the value doesn't flicker back.
+  function syncConcurrency(run) {
+    if (run.phase === "transcoding") {
+      var running = (run.active || []).length;
+      concHint.textContent = running === 1 ? "1 running" : running + " running";
+    } else {
+      concHint.textContent = "applies once transcoding starts";
+    }
+    if (Date.now() - lastConcAdjust < 1500) return;
+    var target = run.concurrency || 1;
+    shownConcurrency = target;
+    concNowEl.textContent = target;
+    setConcButtons(target);
+  }
+
   /* ============ Settings modal ============ */
 
   var settingsBack = $("settingsBack");
@@ -1549,6 +2089,8 @@
   var defaultQualityVal = $("defaultQualityVal");
   var concurrencyInput = $("concurrency");
   var concurrencyVal = $("concurrencyVal");
+  var scanConcurrencyInput = $("scanConcurrency");
+  var scanConcurrencyVal = $("scanConcurrencyVal");
   var schedEnabled = $("schedEnabled");
   var schedDetail = $("schedDetail");
   var schedTime = $("schedTime");
@@ -1600,7 +2142,7 @@
     var rm = document.createElement("button");
     rm.type = "button";
     rm.className = "path-remove";
-    rm.textContent = "✕";
+    rm.innerHTML = '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
     rm.setAttribute("aria-label", "Remove library");
     rm.addEventListener("click", function () {
       if (row.parentNode) row.parentNode.removeChild(row);
@@ -1665,6 +2207,10 @@
     concurrencyVal.textContent = concurrencyInput.value;
   });
 
+  scanConcurrencyInput.addEventListener("input", function () {
+    scanConcurrencyVal.textContent = scanConcurrencyInput.value;
+  });
+
   $("addLibrary").addEventListener("click", function () {
     addLibraryRow({ quality: defaultQualityValue(), enabled: true });
   });
@@ -1687,6 +2233,10 @@
     var cc = cfg.concurrency != null ? cfg.concurrency : 3;
     concurrencyInput.value = cc;
     concurrencyVal.textContent = cc;
+
+    var sc = cfg.scanConcurrency != null ? cfg.scanConcurrency : 6;
+    scanConcurrencyInput.value = sc;
+    scanConcurrencyVal.textContent = sc;
 
     // Libraries
     libList.textContent = "";
@@ -1755,6 +2305,7 @@
     var out = {};
     out.defaultQuality = Number(defaultQualityInput.value);
     out.concurrency = Number(concurrencyInput.value);
+    out.scanConcurrency = Number(scanConcurrencyInput.value);
 
     var days = [];
     dayButtons.forEach(function (b) {
@@ -1823,6 +2374,22 @@
   });
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape" && settingsBack.classList.contains("show")) closeSettings();
+  });
+
+  /* ============ Theme toggle ============ */
+
+  var themeBtn = $("themeBtn");
+  function currentTheme() {
+    return document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
+  }
+  function applyTheme(t, persist) {
+    document.documentElement.setAttribute("data-theme", t);
+    if (persist) { try { localStorage.setItem("smt-theme", t); } catch (e) {} }
+    themeBtn.title = "Switch to " + (t === "light" ? "dark" : "light") + " mode";
+  }
+  applyTheme(currentTheme(), false);
+  themeBtn.addEventListener("click", function () {
+    applyTheme(currentTheme() === "light" ? "dark" : "light", true);
   });
 
   /* ============ Boot ============ */
