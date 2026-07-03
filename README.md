@@ -76,7 +76,8 @@ only care about the sizes.
 
 Beyond the one-shot CLI, SMT can run as an always-on macOS background service with
 a small web UI to start, stop, and schedule runs, configure libraries (each with
-its own quality), and watch live progress. Every processed file is logged to
+its own quality), run several transcodes in parallel, and watch live progress. Every
+processed file is logged to
 SQLite: path, size before/after, space saved, whether it was replaced (only when
 the HEVC output is smaller), the decode path used (hardware/software), and the
 encode time.
@@ -119,10 +120,12 @@ network, so keep it on a trusted LAN.
 * **Run now** transcodes all enabled libraries. **Stop** aborts safely — originals
   are only ever replaced after a verified, smaller HEVC output, so a stop at worst
   discards an in-progress temporary file.
+* **Concurrency** — run several transcodes at once (Settings, or adjust it live
+  during a run). Scanning can probe multiple files in parallel too.
 * **Schedule** a daily or weekly automatic run in Settings (the service has its own
   scheduler; no cron needed).
-* The dashboard shows live per-file progress, lifetime space saved, recent files,
-  and past runs.
+* The dashboard shows live per-file progress, projected time left and savings for the
+  active run, lifetime space saved, recent files, and past runs.
 
 ### Where data lives
 
