@@ -432,12 +432,31 @@
 
   /* Run estimates (projected ETA + savings for the active run). */
   .estimates {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
     margin-top: 16px;
     padding-top: 16px;
     border-top: 1px solid var(--border-soft);
+  }
+  .est-tiles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  /* Placeholder shown while the real projection is still being computed. */
+  .est-calc {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--muted);
+    padding: 4px 2px;
+  }
+  .est-calc-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent-hover);
+    animation: pulse 1.4s ease-in-out infinite;
   }
   .est {
     flex: 1 1 150px;
@@ -1000,23 +1019,30 @@
       <span class="chip bad">failed <b id="cFailed">0</b></span>
     </div>
 
-    <!-- Projected ETA + savings for the active run, estimated from the files
-         processed so far. Hidden until there is enough data to be meaningful. -->
+    <!-- Projected ETA + savings for the active run. While transcoding, this
+         shows a single "calculating" placeholder until the real, final
+         projection is ready, then swaps in the numbers — no partial estimates. -->
     <div class="estimates hidden" id="estimates">
-      <div class="est">
-        <span class="est-lbl">Est. time left</span>
-        <span class="est-val" id="estEta">—</span>
-        <span class="est-sub" id="estEtaSub"></span>
+      <div class="est-calc" id="estCalc">
+        <span class="est-calc-dot"></span>
+        <span>Calculating projections…</span>
       </div>
-      <div class="est">
-        <span class="est-lbl">Projected savings</span>
-        <span class="est-val green" id="estSaved">—</span>
-        <span class="est-sub" id="estSavedSub"></span>
-      </div>
-      <div class="est">
-        <span class="est-lbl">Replace rate</span>
-        <span class="est-val" id="estRate">—</span>
-        <span class="est-sub" id="estRateSub"></span>
+      <div class="est-tiles hidden" id="estTiles">
+        <div class="est">
+          <span class="est-lbl">Est. time left</span>
+          <span class="est-val" id="estEta">—</span>
+          <span class="est-sub" id="estEtaSub"></span>
+        </div>
+        <div class="est">
+          <span class="est-lbl">Projected savings</span>
+          <span class="est-val green" id="estSaved">—</span>
+          <span class="est-sub" id="estSavedSub"></span>
+        </div>
+        <div class="est">
+          <span class="est-lbl">Replace rate</span>
+          <span class="est-val" id="estRate">—</span>
+          <span class="est-sub" id="estRateSub"></span>
+        </div>
       </div>
     </div>
   </section>
@@ -1653,28 +1679,34 @@
   }
 
   var estBox = $("estimates");
+  var estCalc = $("estCalc");
+  var estTiles = $("estTiles");
   function renderPredictions(run) {
     if (run.phase !== "transcoding") { estBox.classList.add("hidden"); return; }
 
     var p = computePredictions(run);
-    var hasEta = p.etaSec != null;
-    var hasSaved = p.projectedSaved != null;
-    if (!hasEta && !hasSaved) { estBox.classList.add("hidden"); return; }
+    // Only show the numbers once this is the real, final projection: a live ETA
+    // plus exact cumulative savings (full-run backfill complete). Until then,
+    // show a single "calculating" placeholder instead of flashing partial or
+    // still-shifting estimates.
+    var ready = p.etaSec != null && p.projectedSaved != null && p.exact;
+
     estBox.classList.remove("hidden");
+    if (!ready) {
+      estCalc.classList.remove("hidden");
+      estTiles.classList.add("hidden");
+      return;
+    }
+    estCalc.classList.add("hidden");
+    estTiles.classList.remove("hidden");
 
     var filesLeft = Math.max(0, (run.queueTotal || 0) - (run.completed || 0));
 
-    $("estEta").textContent = hasEta ? formatLongEta(p.etaSec) : "—";
-    $("estEtaSub").textContent = hasEta ? (filesLeft.toLocaleString() + " files left") : "gathering data…";
+    $("estEta").textContent = formatLongEta(p.etaSec);
+    $("estEtaSub").textContent = filesLeft.toLocaleString() + " files left";
 
-    if (hasSaved) {
-      $("estSaved").textContent = "~" + formatBytes(p.projectedSaved);
-      var soFar = formatBytes(p.savedSoFar) + " so far";
-      $("estSavedSub").textContent = p.exact ? soFar : (soFar + " (computing…)");
-    } else {
-      $("estSaved").textContent = "—";
-      $("estSavedSub").textContent = "";
-    }
+    $("estSaved").textContent = "~" + formatBytes(p.projectedSaved);
+    $("estSavedSub").textContent = formatBytes(p.savedSoFar) + " so far";
 
     if (p.replacedRate != null) {
       var pctR = Math.round(p.replacedRate * 100);
