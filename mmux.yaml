@@ -21,3 +21,15 @@ processes:
       - 'tail -n 200 -F "$HOME/Library/Application Support/simple-media-transcoder/run.log"'
     cwd: .
     autostart: false
+
+  # Restart the installed launchd daemon (ch.marvinvr.smt). kickstart -k kills
+  # the running instance and relaunches it — the standard "reload" since the
+  # server has no SIGHUP hot-reload. sh -c expands $(id -u) into the gui domain.
+  # Manual only (autostart: false); run it after updating server.ts.
+  - name: Restart daemon
+    cmd: sh
+    args:
+      - "-c"
+      - 'launchctl kickstart -k "gui/$(id -u)/ch.marvinvr.smt"'
+    cwd: .
+    autostart: false
