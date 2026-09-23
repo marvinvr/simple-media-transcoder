@@ -222,6 +222,31 @@ unmuxable_stream_indices() {
     awk -F',' '$2 == "unknown" { print $1 }'
 }
 
+# Count the audio and subtitle streams ffmpeg can identify, printed as
+# "<audio> <subtitle>". Streams with codec_name "unknown" are excluded because
+# encode_file drops them (see unmuxable_stream_indices), so a source and a
+# complete encode of it always produce the same counts.
+stream_counts() {
+  ffprobe \
+    -v error \
+    -show_entries stream=codec_name,codec_type \
+    -of compact=p=0 \
+    "$1" 2>/dev/null |
+    awk -F'|' '
+      {
+        NAME = ""; TYPE = ""
+        for (I = 1; I <= NF; I++) {
+          split($I, KV, "=")
+          if (KV[1] == "codec_name") NAME = KV[2]
+          else if (KV[1] == "codec_type") TYPE = KV[2]
+        }
+        if (NAME == "unknown") next
+        if (TYPE == "audio") A++
+        else if (TYPE == "subtitle") S++
+      }
+      END { printf "%d %d\n", A, S }'
+}
+
 relative_path() {
   local FILE="$1"
 
@@ -568,7 +593,14 @@ encode_with_fallback() {
   local -a EXTRA_ARGS
   EXTRA_ARGS=("$@")
 
-  # Attempt hardware decoding and hardware encoding first.
+  # Attempt hardware decoding and hardware encoding first. ffmpeg runs with
+  # -loglevel error, so anything in the log means something went wrong even when
+  # it exits 0 — VideoToolbox decode errors can leave corrupt or missing frames
+  # without failing the encode. Only a clean hardware run is trusted; otherwise
+  # the file is re-encoded with the more forgiving software decoder. [mjpeg]
+  # lines are ignored: they come from probing broken embedded cover art, which
+  # encode_file drops anyway, and would otherwise force every such file through
+  # a pointless second encode.
   if encode_file hardware \
     "$INPUT" "$OUTPUT" "$MUXER" \
     "$COMPLETED" "$TOTAL" "$STATUS" \
@@ -576,8 +608,11 @@ encode_with_fallback() {
     "${EXTRA_ARGS[@]}" \
     2>"$ERROR_LOG"
   then
-    LAST_DECODE_MODE="hardware"
-    return 0
+    if ! grep -qv '^\[mjpeg @' "$ERROR_LOG" 2>/dev/null; then
+      LAST_DECODE_MODE="hardware"
+      return 0
+    fi
+    printf '%s\n' "--- hardware decode exited 0 but reported errors; retrying with software decode ---" >> "$ERROR_LOG"
   fi
 
   rm -f "$OUTPUT"
@@ -891,38 +926,62 @@ transcode_one_file() {
     return 0
   fi
 
+  # Validate the encode before it may replace the original. ffmpeg can exit 0
+  # yet leave a truncated file (e.g. when reading the source over a network share
+  # ends early), and a truncated file always passes the "is smaller" check below,
+  # so the duration and the audio/subtitle stream layout must match the source.
+  local REJECT=""
+  local OUTPUT_DURATION=""
+  local DURATION_TOLERANCE=0
+  local SOURCE_STREAMS=""
+  local OUTPUT_STREAMS=""
+
   OUTPUT_CODEC="$(video_codec "$TEMP")"
   OUTPUT_RESOLUTION="$(video_resolution "$TEMP")"
 
   if [[ "$OUTPUT_CODEC" != "hevc" ]]; then
-    FAILED=$(( FAILED + 1 ))
-    finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
-      "FAILED: Output is not HEVC: $RELATIVE_PATH"
-    emit file_done "status=failed" "size_before=$ORIGINAL_SIZE" \
-      "size_after=0" "decode=$LAST_DECODE_MODE" \
-      "enc=$(( SECONDS - ENC_START ))" \
-      "rel_b64=$(smt_b64 "$RELATIVE_PATH")" \
-      "path_b64=$(smt_b64 "$FILE")" \
-      "err_b64=$(smt_b64 "Output codec was ${OUTPUT_CODEC:-unknown}, not hevc")"
-    CURRENT_TEMP=""
-    CURRENT_ERROR_LOG=""
-    rm -f "$TEMP"
-    return 0
+    REJECT="Output codec was ${OUTPUT_CODEC:-unknown}, not hevc"
+  elif [[ "$OUTPUT_RESOLUTION" != "$RESOLUTION" ]]; then
+    REJECT="Resolution changed $RESOLUTION -> $OUTPUT_RESOLUTION"
   fi
 
-  if [[ "$OUTPUT_RESOLUTION" != "$RESOLUTION" ]]; then
+  # Allow 1% (at least 2s) of slack for container/rounding differences. Skipped
+  # when the source duration was unknown at scan time.
+  if [[ -z "$REJECT" && "$DURATION" == <-> ]] && (( DURATION > 0 )); then
+    OUTPUT_DURATION="$(video_duration "$TEMP")"
+    DURATION_TOLERANCE=$(( DURATION / 100 ))
+    (( DURATION_TOLERANCE < 2 )) && DURATION_TOLERANCE=2
+    if [[ -z "$OUTPUT_DURATION" ]]; then
+      REJECT="Could not read output duration (source ${DURATION}s)"
+    elif (( OUTPUT_DURATION + DURATION_TOLERANCE < DURATION )); then
+      REJECT="Output truncated: ${OUTPUT_DURATION}s of ${DURATION}s"
+    fi
+  fi
+
+  if [[ -z "$REJECT" ]]; then
+    SOURCE_STREAMS="$(stream_counts "$FILE")"
+    OUTPUT_STREAMS="$(stream_counts "$TEMP")"
+    if [[ "$SOURCE_STREAMS" != "$OUTPUT_STREAMS" ]]; then
+      REJECT="Stream mismatch (audio subtitle): source ${SOURCE_STREAMS:-?}, output ${OUTPUT_STREAMS:-?}"
+    fi
+  fi
+
+  if [[ -n "$REJECT" ]]; then
     FAILED=$(( FAILED + 1 ))
     finish_item "$CURRENT" "$TRANSCODE_TOTAL" \
-      "FAILED: Resolution changed $RESOLUTION -> $OUTPUT_RESOLUTION: $RELATIVE_PATH"
+      "FAILED: $REJECT: $RELATIVE_PATH"
     emit file_done "status=failed" "size_before=$ORIGINAL_SIZE" \
       "size_after=0" "decode=$LAST_DECODE_MODE" \
       "enc=$(( SECONDS - ENC_START ))" \
       "rel_b64=$(smt_b64 "$RELATIVE_PATH")" \
       "path_b64=$(smt_b64 "$FILE")" \
-      "err_b64=$(smt_b64 "Resolution changed $RESOLUTION -> $OUTPUT_RESOLUTION")"
+      "err_b64=$(smt_b64 "$REJECT")"
     CURRENT_TEMP=""
     CURRENT_ERROR_LOG=""
     rm -f "$TEMP"
+    # Keep a non-empty log (software-decode run after hardware errors) for
+    # inspection; an empty one is just clutter in the library folder.
+    [[ -s "$ERROR_LOG" ]] || rm -f "$ERROR_LOG"
     return 0
   fi
 
